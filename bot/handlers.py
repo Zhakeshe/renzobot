@@ -22,6 +22,15 @@ class StarsState(StatesGroup):
     waiting_for_amount = State()
     waiting_for_id = State()
 
+class PremiumState(StatesGroup):
+    waiting_for_months = State()
+    waiting_for_id = State()
+
+class NFTState(StatesGroup):
+    waiting_for_days = State()
+    waiting_for_address = State()
+    waiting_for_ton_connect = State()
+
 load_dotenv()
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
@@ -128,17 +137,6 @@ async def buy_stars_info(callback: CallbackQuery, state: FSMContext, api: APICli
     user = await db.get_user(callback.from_user.id)
     lang = user[4] if user else 'kz'
     try:
-        # Алдымен дайын тауарларды (items) тексеру
-        items_data = await api.get_stars_items()
-        if items_data.get("success") and items_data.get("items"):
-            text = {
-                'kz': "🌟 **Telegram Stars сатып алу**\n\nҚажетті пакетті таңдаңыз:",
-                'ru': "🌟 **Покупка Telegram Stars**\n\nВыберите нужный пакет:"
-            }[lang]
-            await callback.message.edit_text(text, reply_markup=stars_items_kb(items_data["items"], lang), parse_mode="Markdown")
-            await callback.answer()
-            return
-
         # Егер тауарлар жоқ болса, мөлшерді қолмен енгізу (rate)
         rate_data = await api.get_stars_rate()
         if rate_data.get("success"):
@@ -227,21 +225,23 @@ async def process_stars_amount(message: Message, state: FSMContext, api: APIClie
 async def process_stars_id(message: Message, state: FSMContext, api: APIClient):
     user = await db.get_user(message.from_user.id)
     lang = user[4] if user else 'kz'
-    target = message.text.strip()
+    target = message.text.strip().replace("@", "")
     data = await state.get_data()
     
-    # Бұл жерде нақты API-ге тапсырыс жіберу логикасы болуы керек
-    # Қазірше тек балансты шегеріп, тапсырысты сақтаймыз
+    # API-ге тапсырыс жіберу
+    order_res = await api.place_stars_order(target, data['amount'])
     
-    await db.update_balance(message.from_user.id, -data['total_kzt'])
-    # Тапсырысты базаға қосу (бұл функцияны database.py-ге қосу керек немесе бар болса қолдану)
-    # await db.create_order(message.from_user.id, "stars", data['amount'], target, data['total_kzt'])
-    
-    await message.answer(
-        f"✅ Тапсырыс қабылданды!\n📦 Мөлшер: `{data['amount']} Stars`\n👤 Алушы: `{target}`\n💰 Бағасы: `{data['total_kzt']:.2f} ₸`" if lang == 'kz' else
-        f"✅ Заказ принят!\n📦 Количество: `{data['amount']} Stars`\n👤 Получатель: `{target}`\n💰 Цена: `{data['total_kzt']:.2f} ₸`",
-        parse_mode="Markdown"
-    )
+    if order_res.get("success"):
+        await db.update_balance(message.from_user.id, -data['total_kzt'])
+        await message.answer(
+            f"✅ Тапсырыс қабылданды!\n📦 Мөлшер: `{data['amount']} Stars`\n👤 Алушы: `@{target}`\n💰 Бағасы: `{data['total_kzt']:.2f} ₸`" if lang == 'kz' else
+            f"✅ Заказ принят!\n📦 Количество: `{data['amount']} Stars`\n👤 Получатель: `@{target}`\n💰 Цена: `{data['total_kzt']:.2f} ₸`",
+            parse_mode="Markdown"
+        )
+    else:
+        error = order_res.get("error", "Unknown error")
+        await message.answer(f"❌ Қате: {error}" if lang == 'kz' else f"❌ Ошибка: {error}")
+        
     await state.clear()
 
 @router.callback_query(F.data.startswith("set_lang_"))
@@ -336,9 +336,63 @@ async def process_promo(message: Message, state: FSMContext):
     await state.clear()
 
 @router.callback_query(F.data == "buy_premium")
-async def buy_premium(callback: CallbackQuery):
-    await callback.message.answer("💎 Telegram Premium сатып алу жақын арада қосылады!")
+async def buy_premium_menu(callback: CallbackQuery):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    builder = InlineKeyboardBuilder()
+    builder.button(text="3 ай / мес", callback_data="premium_3")
+    builder.button(text="6 ай / мес", callback_data="premium_6")
+    builder.button(text="12 ай / мес", callback_data="premium_12")
+    builder.button(text="‹ Мәзірге / В меню", callback_data="back_to_main")
+    builder.adjust(1)
+    
+    text = "💎 Telegram Premium мерзімін таңдаңыз:" if lang == 'kz' else "💎 Выберите срок Telegram Premium:"
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
     await callback.answer()
+
+@router.callback_query(F.data.startswith("premium_"))
+async def select_premium(callback: CallbackQuery, state: FSMContext):
+    months = int(callback.data.split("_")[1])
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    
+    # Бағаларды API-ден алу керек немесе қолмен қою (API-де Premium бағасын алу жоқ сияқты)
+    # Мысалы: 3 ай - 5000, 6 ай - 8000, 12 ай - 14000
+    prices = {3: 5000, 6: 8000, 12: 14000}
+    price = prices[months]
+    
+    if user[1] < price:
+        await callback.message.answer(f"❌ Қаражат жеткіліксіз! Бағасы: {price} ₸" if lang == 'kz' else f"❌ Недостаточно средств! Цена: {price} ₸")
+        return
+
+    await state.update_data(months=months, price=price)
+    await callback.message.answer("👤 Premium жіберілетін пайдаланушының Юзернеймін жазыңыз (мысалы: `durov`):", parse_mode="Markdown")
+    await state.set_state(PremiumState.waiting_for_id)
+    await callback.answer()
+
+@router.message(PremiumState.waiting_for_id)
+async def process_premium_id(message: Message, state: FSMContext, api: APIClient):
+    user = await db.get_user(message.from_user.id)
+    lang = user[4] if user else 'kz'
+    target = message.text.strip().replace("@", "")
+    data = await state.get_data()
+    
+    order_res = await api.place_premium_order(target, data['months'])
+    
+    if order_res.get("success"):
+        await db.update_balance(message.from_user.id, -data['price'])
+        await message.answer(
+            f"✅ Premium тапсырысы қабылданды!\n📦 Мерзімі: `{data['months']} ай`\n👤 Алушы: `@{target}`" if lang == 'kz' else
+            f"✅ Заказ на Premium принят!\n📦 Срок: `{data['months']} мес`\n👤 Получатель: `@{target}`",
+            parse_mode="Markdown"
+        )
+    else:
+        error = order_res.get("error", "Unknown error")
+        await message.answer(f"❌ Қате: {error}" if lang == 'kz' else f"❌ Ошибка: {error}")
+        
+    await state.clear()
 
 @router.callback_query(F.data == "rent_nft")
 async def show_nft_rental_menu(callback: CallbackQuery):
@@ -369,31 +423,160 @@ async def show_nft_items(callback: CallbackQuery, api: APIClient):
     lang = user[4] if user else 'kz'
     
     try:
-        data = await api.get_nft_items(nft_type)
-        if data.get("success") and data.get("items"):
-            items_text = ""
-            for item in data["items"]:
-                price_kzt = item["price_rub_with_margin"] * KZT_RATE
-                items_text += f"🔹 `{item['name']}` — `{price_kzt:.2f} ₸` (ID: `{item['id']}`)\n"
+        # 1. Коллекцияларды алу
+        collections_res = await api.get_nft_collections()
+        if not collections_res.get("success"):
+            await callback.message.answer("❌ Коллекцияларды алу мүмкін болмады." if lang == 'kz' else "❌ Не удалось получить коллекции.")
+            return
+        
+        # 2. Керекті коллекцияны табу
+        target_name_part = {
+            "gifts": "Gifts",
+            "usernames": "Usernames",
+            "numbers": "Numbers"
+        }[nft_type]
+        
+        collection = next((c for c in collections_res.get("collections", []) if target_name_part.lower() in c.get("name", "").lower()), None)
+        
+        if not collection:
+            await callback.message.answer("❌ Бұл санатта тауарлар табылмады." if lang == 'kz' else "❌ В этой категории товаров не найдено.")
+            return
             
-            type_label = {
-                "gifts": "Подарки",
-                "usernames": "Юзернеймдер" if lang == 'kz' else "Юзернеймы",
-                "numbers": "Номерлер" if lang == 'kz' else "Номера"
-            }[nft_type]
-            
-            await callback.message.answer(
-                TEXTS[lang]['nft_list'].format(type=type_label, items=items_text),
-                parse_mode="Markdown"
-            )
+        # 3. Тауарлар тізімін алу
+        data = await api.get_nft_list(collection["address"])
+        if data.get("success"):
+            if data.get("items"):
+                items_text = ""
+                from aiogram.utils.keyboard import InlineKeyboardBuilder
+                builder = InlineKeyboardBuilder()
+                
+                for item in data["items"]:
+                    price_kzt = item["price_per_day_rub_with_margin"] * KZT_RATE
+                    items_text += f"🔹 `{item['name']}` — `{price_kzt:.2f} ₸/күн` (ID: `{item['id']}`)\n"
+                    builder.button(text=f"Жалға алу: {item['name']}", callback_data=f"rent_item_{item['address']}")
+                
+                builder.button(text="‹ Артқа", callback_data="rent_nft")
+                builder.adjust(1)
+                
+                type_label = {
+                    "gifts": "Подарки",
+                    "usernames": "Юзернеймдер" if lang == 'kz' else "Юзернеймы",
+                    "numbers": "Номерлер" if lang == 'kz' else "Номера"
+                }[nft_type]
+                
+                await callback.message.answer(
+                    TEXTS[lang]['nft_list'].format(type=type_label, items=items_text),
+                    reply_markup=builder.as_markup(),
+                    parse_mode="Markdown"
+                )
+            else:
+                await callback.message.answer("❌ Қазіргі уақытта тауарлар жоқ." if lang == 'kz' else "❌ В данный момент товаров нет.")
         else:
-            await callback.message.answer("❌ Қазіргі уақытта тауарлар жоқ." if lang == 'kz' else "❌ В данный момент товаров нет.")
+            error_msg = data.get("error", "Unknown error")
+            await callback.message.answer(f"❌ Қате: {error_msg}" if lang == 'kz' else f"❌ Ошибка: {error_msg}")
     except Exception as e:
         await callback.message.answer(f"❌ Қате: {str(e)}")
     
     await callback.answer()
 
-@router.callback_query(F.data == "history")
-async def show_history(callback: CallbackQuery):
-    await callback.message.answer("📜 Тапсырыстар тарихы бос.")
+@router.callback_query(F.data.startswith("rent_item_"))
+async def start_nft_rent(callback: CallbackQuery, state: FSMContext, api: APIClient):
+    nft_address = callback.data.split("_")[2]
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    
+    rate_res = await api.get_nft_rate(nft_address)
+    if not rate_res.get("success"):
+        await callback.message.answer("❌ Тауар туралы ақпарат алу мүмкін болмады." if lang == 'kz' else "❌ Не удалось получить информацию о товаре.")
+        return
+        
+    price_kzt = rate_res["price_per_day_rub_with_margin"] * KZT_RATE
+    await state.update_data(nft_address=nft_address, price_per_day=price_kzt, name=rate_res.get("nft_name", "NFT"))
+    
+    await callback.message.answer(
+        f"💎 **{rate_res.get('nft_name', 'NFT')}**\n\n"
+        f"💰 Жалдау бағасы: `{price_kzt:.2f} ₸/күн`\n"
+        f"📦 Ең аз мерзім: {rate_res.get('min_days', 1)} күн\n\n"
+        "Неше күнге жалдағыңыз келеді? (санын жазыңыз):",
+        parse_mode="Markdown"
+    )
+    await state.set_state(NFTState.waiting_for_days)
     await callback.answer()
+
+@router.message(NFTState.waiting_for_days)
+async def process_nft_days(message: Message, state: FSMContext, api: APIClient):
+    if not message.text.isdigit():
+        await message.answer("❌ Тек сандарды енгізіңіз.")
+        return
+        
+    days = int(message.text)
+    data = await state.get_data()
+    user = await db.get_user(message.from_user.id)
+    lang = user[4] if user else 'kz'
+    
+    total_price = data['price_per_day'] * days
+    
+    if user[1] < total_price:
+        await message.answer(f"❌ Қаражат жеткіліксіз! Қажет: {total_price:.2f} ₸")
+        await state.clear()
+        return
+        
+    # Жалдау тапсырысын жіберу
+    rent_res = await api.place_nft_rent_order(data['nft_address'], days)
+    
+    if rent_res.get("success"):
+        await db.update_balance(message.from_user.id, -total_price)
+        
+        from aiogram.utils.keyboard import InlineKeyboardBuilder
+        builder = InlineKeyboardBuilder()
+        builder.button(text="🔗 TON Connect қосу / Подключить", callback_data=f"connect_nft_{data['nft_address']}")
+        
+        await message.answer(
+            f"✅ **Жалдау сәтті орындалды!**\n\n"
+            f"📦 Тауар: `{data['name']}`\n"
+            f"📅 Мерзімі: `{days} күн`\n"
+            f"💰 Барлығы: `{total_price:.2f} ₸`\n\n"
+            "Енді Fragment-те қолдану үшін TON Connect арқылы қосылуыңыз керек.",
+            reply_markup=builder.as_markup(),
+            parse_mode="Markdown"
+        )
+    else:
+        error = rent_res.get("error", "Unknown error")
+        await message.answer(f"❌ Қате: {error}")
+        
+    await state.clear()
+
+@router.callback_query(F.data.startswith("connect_nft_"))
+async def start_connect_nft(callback: CallbackQuery, state: FSMContext):
+    nft_address = callback.data.split("_")[2]
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    
+    await state.update_data(nft_address=nft_address)
+    await callback.message.answer(
+        "🔗 Fragment-тен TON Connect сілтемесін (URL) жіберіңіз:" if lang == 'kz' else
+        "🔗 Пришлите TON Connect ссылку (URL) из Fragment:"
+    )
+    await state.set_state(NFTState.waiting_for_ton_connect)
+    await callback.answer()
+
+@router.message(NFTState.waiting_for_ton_connect)
+async def process_ton_connect(message: Message, state: FSMContext, api: APIClient):
+    url = message.text.strip()
+    if not url.startswith("tc://") and not url.startswith("https://"):
+        await message.answer("❌ Қате сілтеме. Қайтадан жіберіңіз.")
+        return
+        
+    data = await state.get_data()
+    user = await db.get_user(message.from_user.id)
+    lang = user[4] if user else 'kz'
+    
+    res = await api.connect_nft_rent(data['nft_address'], url)
+    
+    if res.get("success"):
+        await message.answer("✅ TON Connect сәтті қосылды! Енді Fragment-те қолдана аласыз." if lang == 'kz' else "✅ TON Connect успешно подключен! Теперь вы можете использовать его на Fragment.")
+    else:
+        error = res.get("error", "Unknown error")
+        await message.answer(f"❌ Қате: {error}")
+        
+    await state.clear()
