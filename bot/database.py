@@ -49,6 +49,8 @@ class Database:
                     order_id_api INTEGER,
                     status TEXT,
                     product_type TEXT,
+                    product_name TEXT,
+                    description TEXT,
                     amount_kzt REAL,
                     profit_kzt REAL,
                     tx_hash TEXT,
@@ -95,6 +97,13 @@ class Database:
                 except: pass
                 await db.execute("INSERT OR REPLACE INTO migrations (version) VALUES (2)")
 
+            if version < 3:
+                try:
+                    await db.execute("ALTER TABLE orders ADD COLUMN product_name TEXT")
+                    await db.execute("ALTER TABLE orders ADD COLUMN description TEXT")
+                except: pass
+                await db.execute("INSERT OR REPLACE INTO migrations (version) VALUES (3)")
+
             await db.commit()
 
     async def update_anti_fraud(self, user_id: int, ip: str, device: str):
@@ -136,6 +145,36 @@ class Database:
             async with db.execute("SELECT SUM(amount_kzt) FROM orders WHERE status = 'completed'") as c2:
                 sales = (await c2.fetchone())[0] or 0.0
             return users, sales
+
+    async def get_global_stats(self):
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute("SELECT COUNT(*) FROM orders WHERE product_type = 'stars' AND status = 'completed'") as c1:
+                stars = (await c1.fetchone())[0] or 0
+            async with db.execute("SELECT COUNT(*) FROM orders WHERE product_type = 'gifts' AND status = 'completed'") as c2:
+                gifts = (await c2.fetchone())[0] or 0
+            async with db.execute("SELECT COUNT(*) FROM orders WHERE product_type = 'usernames' AND status = 'completed'") as c3:
+                usernames = (await c3.fetchone())[0] or 0
+            return stars, gifts, usernames
+
+    async def create_order(self, user_id: int, order_id_api: int, product_type: str, product_name: str, description: str, amount_kzt: float, profit_kzt: float, status: str = 'pending'):
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "INSERT INTO orders (user_id, order_id_api, product_type, product_name, description, amount_kzt, profit_kzt, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (user_id, order_id_api, product_type, product_name, description, amount_kzt, profit_kzt, status)
+            )
+            order_id = cursor.lastrowid
+            await db.commit()
+            return order_id
+
+    async def get_user_orders(self, user_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute("SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC", (user_id,)) as cursor:
+                return await cursor.fetchall()
+
+    async def get_order(self, order_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute("SELECT * FROM orders WHERE id = ?", (order_id,)) as cursor:
+                return await cursor.fetchone()
 
     async def get_profit_stats(self):
         async with aiosqlite.connect(self.db_path) as db:

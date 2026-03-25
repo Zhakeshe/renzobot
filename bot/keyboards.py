@@ -5,27 +5,45 @@ def main_menu_kb(is_admin: bool = False, lang: str = 'kz'):
     builder = InlineKeyboardBuilder()
     if lang == 'kz':
         builder.button(text="🌟 Stars сатып алу", callback_data="buy_stars")
-        builder.button(text="💎 Telegram Premium", callback_data="buy_premium")
+        builder.button(text="💰 Stars сату", callback_data="sell_stars")
         builder.button(text="🏠 NFT жалдау", callback_data="rent_nft")
+        builder.button(text="📦 NFT сатып алу", callback_data="buy_nft")
+        builder.button(text="🎁 Кәдімгі сыйлық", callback_data="buy_gift")
+        builder.button(text="💎 TON сатып алу", callback_data="buy_ton")
+        builder.button(text="✨ Премиум", callback_data="buy_premium")
+        builder.button(text="💳 Толтыру", callback_data="topup")
         builder.button(text="👤 Профиль", callback_data="profile")
-        builder.button(text="👥 Реферал", callback_data="referral")
         builder.button(text="🛠 Қолдау", callback_data="support")
-        builder.button(text="🎁 Промокод", callback_data="promocode")
-        builder.button(text="🌍 Тілді өзгерту", callback_data="change_lang")
+        builder.button(text="🧮 Калькулятор", callback_data="calculator")
+        builder.button(text="ℹ️ Ақпарат", callback_data="info")
+        builder.button(text="👥 Реферал жүйесі", callback_data="referral")
+        builder.button(text="🏆 Топ клиенттер", callback_data="top_clients")
+        builder.button(text="💕 Пікірлер", url="https://t.me/reviews")
+        builder.button(text="🎁 Нұсқаулық", url="https://t.me/instruction")
+        builder.button(text="💸 Жарнама", url="https://t.me/ads")
     else:
-        builder.button(text="🌟 Купить Stars", callback_data="buy_stars")
-        builder.button(text="💎 Telegram Premium", callback_data="buy_premium")
+        builder.button(text="🌟 Купить звёзды", callback_data="buy_stars")
+        builder.button(text="💰 Продать звёзды", callback_data="sell_stars")
         builder.button(text="🏠 Аренда NFT", callback_data="rent_nft")
+        builder.button(text="📦 Купить NFT.", callback_data="buy_nft")
+        builder.button(text="🎁 Купить обычный подарок.", callback_data="buy_gift")
+        builder.button(text="💎 Купить TON", callback_data="buy_ton")
+        builder.button(text="✨ Премиум", callback_data="buy_premium")
+        builder.button(text="💳 Пополнение", callback_data="topup")
         builder.button(text="👤 Профиль", callback_data="profile")
-        builder.button(text="👥 Реферал", callback_data="referral")
         builder.button(text="🛠 Поддержка", callback_data="support")
-        builder.button(text="🎁 Промокод", callback_data="promocode")
-        builder.button(text="🌍 Сменить язык", callback_data="change_lang")
+        builder.button(text="🧮 Калькулятор", callback_data="calculator")
+        builder.button(text="ℹ️ Информация", callback_data="info")
+        builder.button(text="👥 Реферальная система", callback_data="referral")
+        builder.button(text="🏆 Топ клиентов", callback_data="top_clients")
+        builder.button(text="💕 Отзывы", url="https://t.me/reviews")
+        builder.button(text="🎁 Инструкция", url="https://t.me/instruction")
+        builder.button(text="💸 Купить рекламу в боте.", url="https://t.me/ads")
         
-    builder.button(text="🖥 Web App", web_app=types.WebAppInfo(url="https://ais-dev-rtojpzn754reldc7yedx5e-747018559939.run.app"))
     if is_admin:
         builder.button(text="📊 Админ панель", callback_data="admin_panel")
-    builder.adjust(2)
+    
+    builder.adjust(2, 2, 1, 1, 1, 2, 2, 1, 1, 1, 1, 1, 1)
     return builder.as_markup()
 
 def language_kb():
@@ -134,5 +152,32 @@ def profile_kb():
     builder = InlineKeyboardBuilder()
     builder.button(text="💰 Толтыру (₸)", callback_data="topup")
     builder.button(text="📜 Тапсырыстар тарихы", callback_data="history")
+    builder.button(text="🌍 Тілді өзгерту / Сменить язык", callback_data="change_lang")
+    builder.button(text="‹ Артқа / Назад", callback_data="back_to_main")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def history_kb(orders: list, lang: str = 'kz'):
+    builder = InlineKeyboardBuilder()
+    for order in orders:
+        # order: (id, user_id, order_id_api, status, product_type, product_name, description, amount_kzt, profit_kzt, tx_hash, is_notified, created_at)
+        status_emoji = "✅" if order[3] == 'completed' else "⏳" if order[3] in ['pending', 'processing'] else "❌"
+        builder.button(text=f"🔹 {order[5]} | {order[7]:.1f}₸ {status_emoji}", callback_data=f"order_view_{order[0]}")
+    
+    back_text = "‹ Профильге қайту" if lang == 'kz' else "‹ Назад к профилю"
+    builder.button(text=back_text, callback_data="profile")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def order_details_kb(order_id: int, lang: str = 'kz'):
+    builder = InlineKeyboardBuilder()
+    if lang == 'kz':
+        builder.button(text="🔄 Fragment қайта қосу", callback_data=f"cn_{order_id}")
+        builder.button(text="✍️ Пікір қалдыру", callback_data=f"review_{order_id}")
+        builder.button(text="‹ Тарихқа қайту", callback_data="history")
+    else:
+        builder.button(text="🔄 Перевязать Fragment", callback_data=f"cn_{order_id}")
+        builder.button(text="✍️ Оставить отзыв", callback_data=f"review_{order_id}")
+        builder.button(text="‹ Назад к истории", callback_data="history")
     builder.adjust(1)
     return builder.as_markup()

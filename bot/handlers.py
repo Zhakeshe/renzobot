@@ -49,7 +49,7 @@ REF_PERCENT = float(os.getenv("REFERRAL_PERCENT", 0.05))
 
 TEXTS = {
     'kz': {
-        'start': "Сәлем, {name}! 👋\nЦифрлық тауарлар дүкеніне қош келдіңіз.",
+        'start': "Қош келдіңіз! Біздің сервисте сіз Telegram Stars, Telegram Premium сатып ала аласыз және NFT жалдай аласыз. 🍪\n\n⭐ Ағымдағы теңгерім: `{balance:.2f} ₸` .\n\n🧸 Біздің сервис көмегімен:\n┌ Сатып алынған жұлдыздар: `{stars_count}` шт.;\n├ Жалға алынған NFT-сыйлықтар: `{gifts_count}` шт.;\n└ Жалға алынған NFT-username: `{usernames_count}` шт.",
         'profile': "👤 **Профиль**\n\n🆔 ID: `{id}`\n💰 Теңгерім: `{balance:.2f} ₸`",
         'ref': "👥 **Реферал жүйесі**\n\nСілтемеңіз:\n`{link}`\n\n🎁 Әрбір толтырудан сізге `{percent}%` бонус түседі!\n\n📊 Статистика:\n👥 Шақырылғандар: `{count}` адам\n💰 Табылған пайда: `{earned:.2f} ₸`",
         'promo_prompt': "🎁 Промокодты енгізіңіз:",
@@ -64,10 +64,12 @@ TEXTS = {
         'nft_rent_days': "💎 **{name}**\n\n💰 Жалдау бағасы: `{price:.2f} ₸/күн`\n📦 Ең аз мерзім: `{min_days}` күн\n\nНеше күнге жалдағыңыз келеді? (санын жазыңыз):",
         'nft_rent_success': "✅ **Жалдау сәтті орындалды!**\n\n📦 Тауар: `{name}`\n📅 Мерзімі: `{days} күн`\n💰 Барлығы: `{total:.2f} ₸`\n\nЕнді Fragment-те қолдану үшін TON Connect арқылы қосылуыңыз керек.",
         'nft_connect_prompt': "🔗 Fragment-тен TON Connect сілтемесін (URL) жіберіңіз:",
-        'nft_connect_success': "✅ TON Connect сәтті қосылды! Енді Fragment-те қолдана аласыз."
+        'nft_connect_success': "✅ TON Connect сәтті қосылды! Енді Fragment-те қолдана аласыз.",
+        'history_title': "📜 **Тапсырыстар тарихы:**",
+        'order_details': "📦 **Тапсырыс мәліметтері #{id}.**\n\n📝 Өнім: `{name}`;\n💰 Бағасы: `{price:.2f} ₸`;\n📊 Статус: {status};\n📅 Күні: `{date}`;\n\n📄 Сипаттама: `{description}`.\n🔗 Fragment: {fragment_status}"
     },
     'ru': {
-        'start': "Привет, {name}! 👋\nДобро пожаловать в магазин цифровых товаров.",
+        'start': "Добро пожаловать! У нас Вы можете приобрести Telegram Stars, Telegram Premium и арендовать NFT. 🍪\n\n⭐ Текущий баланс: `{balance:.2f} ₸` .\n\n🧸 С помощью нашего сервиса:\n┌ Приобретено звёзд: `{stars_count}` шт.;\n├ Арендовано NFT-подарков: `{gifts_count}` шт.;\n└ Арендовано NFT-username: `{usernames_count}` шт.",
         'profile': "👤 **Профиль**\n\n🆔 ID: `{id}`\n💰 Баланс: `{balance:.2f} ₸`",
         'ref': "👥 **Реферальная система**\n\nВаша ссылка:\n`{link}`\n\n🎁 Вы получаете `{percent}%` от каждого пополнения реферала!\n\n📊 Статистика:\n👥 Приглашено: `{count}` человек\n💰 Заработано: `{earned:.2f} ₸`",
         'promo_prompt': "🎁 Введите промокод:",
@@ -82,7 +84,9 @@ TEXTS = {
         'nft_rent_days': "💎 **{name}**\n\n💰 Цена аренды: `{price:.2f} ₸/день`\n📦 Мин. срок: `{min_days}` дн.\n\nНа сколько дней хотите арендовать? (введите число):",
         'nft_rent_success': "✅ **Аренда успешно оформлена!**\n\n📦 Товар: `{name}`\n📅 Срок: `{days} дн.`\n💰 Итого: `{total:.2f} ₸`\n\nТеперь вам нужно подключиться через TON Connect для использования на Fragment.",
         'nft_connect_prompt': "🔗 Пришлите TON Connect ссылку (URL) из Fragment:",
-        'nft_connect_success': "✅ TON Connect успешно подключен! Теперь вы можете использовать его на Fragment."
+        'nft_connect_success': "✅ TON Connect успешно подключен! Теперь вы можете использовать его на Fragment.",
+        'history_title': "📜 **История покупок:**",
+        'order_details': "📦 **Детали заказа #{id}.**\n\n📝 Продукт: `{name}`;\n💰 Цена: `{price:.2f} ₸`;\n📊 Статус: {status};\n📅 Дата: `{date}`;\n\n📄 Описание: Аренда `{name}` на `{days}` дней.\n🔗 Fragment: {fragment_status}"
     }
 }
 
@@ -113,9 +117,18 @@ async def cmd_start(message: Message, command: CommandObject):
     
     lang = user[4] if user else 'kz'
     is_admin = message.from_user.id == ADMIN_ID
+    
+    stars_count, gifts_count, usernames_count = await db.get_global_stats()
+    
     await message.answer(
-        TEXTS[lang]['start'].format(name=message.from_user.full_name),
-        reply_markup=main_menu_kb(is_admin, lang)
+        TEXTS[lang]['start'].format(
+            balance=user[1],
+            stars_count=stars_count,
+            gifts_count=gifts_count,
+            usernames_count=usernames_count
+        ),
+        reply_markup=main_menu_kb(is_admin, lang),
+        parse_mode="Markdown"
     )
 
 @router.callback_query(F.data == "change_lang")
@@ -720,9 +733,18 @@ async def back_to_main(callback: CallbackQuery):
     user = await db.get_user(callback.from_user.id)
     lang = user[4] if user else 'kz'
     is_admin = callback.from_user.id == ADMIN_ID
+    
+    stars_count, gifts_count, usernames_count = await db.get_global_stats()
+    
     await callback.message.edit_text(
-        TEXTS[lang]['start'].format(name=callback.from_user.full_name),
-        reply_markup=main_menu_kb(is_admin, lang)
+        TEXTS[lang]['start'].format(
+            balance=user[1],
+            stars_count=stars_count,
+            gifts_count=gifts_count,
+            usernames_count=usernames_count
+        ),
+        reply_markup=main_menu_kb(is_admin, lang),
+        parse_mode="Markdown"
     )
     await callback.answer()
 
@@ -964,6 +986,23 @@ async def process_nft_days(message: Message, state: FSMContext, api: APIClient):
         # Get transaction_id or order_id from response
         transaction_id = rent_res.get("transaction_id") or rent_res.get("order_id") or rent_res.get("id")
         
+        # Log order to DB
+        # product_type should be determined from category
+        state_data = await state.get_data()
+        category = state_data.get("category", "nft")
+        description = f"Аренда {data['name']} на {days} дней."
+        
+        await db.create_order(
+            user_id=message.from_user.id,
+            order_id_api=transaction_id,
+            product_type=category,
+            product_name=data['name'],
+            description=description,
+            amount_kzt=total_price,
+            profit_kzt=total_price * 0.15, # Example profit
+            status='completed'
+        )
+        
         from aiogram.utils.keyboard import InlineKeyboardBuilder
         builder = InlineKeyboardBuilder()
         if transaction_id:
@@ -1025,3 +1064,48 @@ async def process_ton_connect(message: Message, state: FSMContext, api: APIClien
         await message.answer(f"❌ Қате: {error}" if lang == 'kz' else f"❌ Ошибка: {error}")
         
     await state.clear()
+
+@router.callback_query(F.data == "history")
+async def show_history(callback: CallbackQuery):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    orders = await db.get_user_orders(callback.from_user.id)
+    
+    from keyboards import history_kb
+    await callback.message.edit_text(
+        TEXTS[lang]['history_title'],
+        reply_markup=history_kb(orders, lang),
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("order_view_"))
+async def view_order(callback: CallbackQuery):
+    order_id = int(callback.data.split("_")[2])
+    order = await db.get_order(order_id)
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    
+    if not order:
+        await callback.answer("❌ Тапсырыс табылмады." if lang == 'kz' else "❌ Заказ не найден.")
+        return
+        
+    # order: (id, user_id, order_id_api, status, product_type, product_name, description, amount_kzt, profit_kzt, tx_hash, is_notified, created_at)
+    status_text = "✅ Выполнен" if order[3] == 'completed' else "⏳ В обработке" if order[3] in ['pending', 'processing'] else "❌ Отменен"
+    fragment_status = "Привязан" if order[9] else "Не привязан" # Using tx_hash as proxy for connection status for now
+    
+    from keyboards import order_details_kb
+    await callback.message.edit_text(
+        TEXTS[lang]['order_details'].format(
+            id=order[0],
+            name=order[5],
+            price=order[7],
+            status=status_text,
+            date=order[11],
+            description=order[6],
+            fragment_status=fragment_status
+        ),
+        reply_markup=order_details_kb(order[0], lang),
+        parse_mode="Markdown"
+    )
+    await callback.answer()
