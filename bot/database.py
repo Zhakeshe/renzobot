@@ -20,7 +20,25 @@ class Database:
                     ip_address TEXT,
                     device_id TEXT,
                     is_blocked INTEGER DEFAULT 0,
+                    referral_balance REAL DEFAULT 0.0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS promocodes (
+                    code TEXT PRIMARY KEY,
+                    amount REAL,
+                    uses_left INTEGER,
+                    is_active INTEGER DEFAULT 1
+                )
+            """)
+
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS used_promocodes (
+                    user_id INTEGER,
+                    code TEXT,
+                    PRIMARY KEY (user_id, code)
                 )
             """)
             
@@ -50,6 +68,12 @@ class Database:
                     await db.execute("ALTER TABLE users ADD COLUMN device_id TEXT")
                 except: pass # Баған бар болса қате бермейді
                 await db.execute("INSERT OR REPLACE INTO migrations (version) VALUES (1)")
+
+            if version < 2:
+                try:
+                    await db.execute("ALTER TABLE users ADD COLUMN referral_balance REAL DEFAULT 0.0")
+                except: pass
+                await db.execute("INSERT OR REPLACE INTO migrations (version) VALUES (2)")
 
             await db.commit()
 
@@ -85,6 +109,14 @@ class Database:
             await db.execute("UPDATE orders SET status = ? WHERE id = ?", (status, db_id))
             await db.commit()
 
+    async def get_stats(self):
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute("SELECT COUNT(*) FROM users") as c1:
+                users = (await c1.fetchone())[0]
+            async with db.execute("SELECT SUM(amount_kzt) FROM orders WHERE status = 'completed'") as c2:
+                sales = (await c2.fetchone())[0] or 0.0
+            return users, sales
+
     async def get_profit_stats(self):
         async with aiosqlite.connect(self.db_path) as db:
             async with db.execute("SELECT SUM(profit_kzt) FROM orders WHERE status = 'completed'") as c:
@@ -95,11 +127,11 @@ class Database:
             async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cursor:
                 return await cursor.fetchone()
 
-    async def create_user(self, user_id: int, username: str):
+    async def create_user(self, user_id: int, username: str, referred_by: int = None):
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
-                "INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)",
-                (user_id, username)
+                "INSERT OR IGNORE INTO users (user_id, username, referred_by) VALUES (?, ?, ?)",
+                (user_id, username, referred_by)
             )
             await db.commit()
 
@@ -108,5 +140,40 @@ class Database:
             await db.execute(
                 "UPDATE users SET balance_kzt = balance_kzt + ? WHERE user_id = ?",
                 (amount, user_id)
+            )
+            await db.commit()
+
+    async def get_referral_stats(self, user_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute("SELECT COUNT(*), SUM(referral_balance) FROM users WHERE referred_by = ?", (user_id,)) as c:
+                row = await c.fetchone()
+                return row[0] or 0, row[1] or 0.0
+
+    async def check_promocode(self, code: str, user_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute("SELECT amount, uses_left FROM promocodes WHERE code = ? AND is_active = 1", (code,)) as c:
+                promo = await c.fetchone()
+                if not promo:
+                    return None, "invalid"
+                amount, uses_left = promo
+                if uses_left <= 0:
+                    return None, "expired"
+            async with db.execute("SELECT 1 FROM used_promocodes WHERE user_id = ? AND code = ?", (user_id, code)) as c:
+                if await c.fetchone():
+                    return None, "already_used"
+                return amount, "ok"
+
+    async def use_promocode(self, user_id: int, code: str, amount: float):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE users SET balance_kzt = balance_kzt + ? WHERE user_id = ?", (amount, user_id))
+            await db.execute("INSERT INTO used_promocodes (user_id, code) VALUES (?, ?)", (user_id, code))
+            await db.execute("UPDATE promocodes SET uses_left = uses_left - 1 WHERE code = ?", (code,))
+            await db.commit()
+
+    async def add_referral_earning(self, referrer_id: int, amount: float):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE users SET balance_kzt = balance_kzt + ?, referral_balance = referral_balance + ? WHERE user_id = ?",
+                (amount, amount, referrer_id)
             )
             await db.commit()

@@ -69,3 +69,29 @@ class APIClient:
                     headers=self.headers
                 )
                 return response.json()
+
+    async def get_nft_items(self, nft_type: str) -> Dict[str, Any]:
+        """
+        nft_type: 'gifts', 'usernames', 'numbers'
+        """
+        async with self.limiter:
+            try:
+                async with httpx.AsyncClient() as client:
+                    # Endpoint pattern: /api/v1/client/nft/{type}
+                    response = await client.get(
+                        f"{self.base_url}/api/v1/client/nft/{nft_type}",
+                        headers=self.headers,
+                        timeout=15
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                    
+                    # Apply margin to prices if they exist in the response
+                    if data.get("success") and "items" in data:
+                        for item in data["items"]:
+                            if "price_rub" in item:
+                                item["price_rub_with_margin"] = self._apply_margin(item["price_rub"])
+                    
+                    return data
+            except Exception as e:
+                return {"success": False, "error": str(e)}

@@ -43,6 +43,21 @@ def admin_kb():
     builder.adjust(1)
     return builder.as_markup()
 
+def nft_rental_kb(lang: str = 'kz'):
+    builder = InlineKeyboardBuilder()
+    if lang == 'kz':
+        builder.button(text="🎁 Подарки", callback_data="nft_gifts")
+        builder.button(text="👤 Юзернеймдер", callback_data="nft_usernames")
+        builder.button(text="☎️ Номерлер", callback_data="nft_numbers")
+        builder.button(text="‹ Мәзірге", callback_data="back_to_main")
+    else:
+        builder.button(text="🎁 Подарки", callback_data="nft_gifts")
+        builder.button(text="👤 Юзернеймы", callback_data="nft_usernames")
+        builder.button(text="☎️ Номера", callback_data="nft_numbers")
+        builder.button(text="‹ В меню", callback_data="back_to_main")
+    builder.adjust(2, 1, 1)
+    return builder.as_markup()
+
 def profile_kb():
     builder = InlineKeyboardBuilder()
     builder.button(text="💰 Толтыру (₸)", callback_data="topup")
