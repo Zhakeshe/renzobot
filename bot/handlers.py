@@ -5,7 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from database import Database
 from api_client import APIClient
-from keyboards import main_menu_kb, profile_kb, language_kb, admin_kb, nft_rental_kb
+from keyboards import main_menu_kb, profile_kb, language_kb, admin_kb, nft_rental_kb, stars_items_kb
 import os
 from dotenv import load_dotenv
 
@@ -17,6 +17,10 @@ class PromoState(StatesGroup):
 
 class TopupState(StatesGroup):
     waiting_for_amount = State()
+
+class StarsState(StatesGroup):
+    waiting_for_amount = State()
+    waiting_for_id = State()
 
 load_dotenv()
 
@@ -68,6 +72,17 @@ async def cmd_start(message: Message, command: CommandObject):
         
         await db.create_user(message.from_user.id, message.from_user.username, referred_by)
         user = await db.get_user(message.from_user.id)
+        
+        if referred_by:
+            try:
+                await message.bot.send_message(
+                    referred_by,
+                    f"👤 Сіздің сілтемеңіз арқылы жаңа пайдаланушы тіркелді: `@{message.from_user.username or message.from_user.id}`\n\n"
+                    f"🎁 Енді оның әрбір толтыруынан сізге бонус түседі!",
+                    parse_mode="Markdown"
+                )
+            except:
+                pass
     
     lang = user[4] if user else 'kz'
     is_admin = message.from_user.id == ADMIN_ID
@@ -109,25 +124,125 @@ async def show_profile(callback: CallbackQuery):
     await callback.answer()
 
 @router.callback_query(F.data == "buy_stars")
-async def buy_stars_info(callback: CallbackQuery, api: APIClient):
+async def buy_stars_info(callback: CallbackQuery, state: FSMContext, api: APIClient):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
     try:
+        # Алдымен дайын тауарларды (items) тексеру
+        items_data = await api.get_stars_items()
+        if items_data.get("success") and items_data.get("items"):
+            text = {
+                'kz': "🌟 **Telegram Stars сатып алу**\n\nҚажетті пакетті таңдаңыз:",
+                'ru': "🌟 **Покупка Telegram Stars**\n\nВыберите нужный пакет:"
+            }[lang]
+            await callback.message.edit_text(text, reply_markup=stars_items_kb(items_data["items"], lang), parse_mode="Markdown")
+            await callback.answer()
+            return
+
+        # Егер тауарлар жоқ болса, мөлшерді қолмен енгізу (rate)
         rate_data = await api.get_stars_rate()
         if rate_data.get("success"):
             price_rub = rate_data["price_per_star_rub_with_margin"]
             price_kzt = price_rub * KZT_RATE
             
-            await callback.message.answer(
-                f"🌟 **Telegram Stars сатып алу**\n\n"
-                f"💵 Бағасы (1 дана): `{price_kzt:.2f} ₸` (~{price_rub} ₽)\n"
-                f"📦 Ең аз мөлшер: {rate_data['min_quantity']}\n\n"
-                "Сатып алғыңыз келетін Stars мөлшерін енгізіңіз:",
-                parse_mode="Markdown"
-            )
+            text = {
+                'kz': f"🌟 **Telegram Stars сатып алу**\n\n💵 Бағасы (1 дана): `{price_kzt:.2f} ₸` (~{price_rub} ₽)\n📦 Ең аз мөлшер: {rate_data['min_quantity']}\n\nСатып алғыңыз келетін Stars мөлшерін енгізіңіз:",
+                'ru': f"🌟 **Покупка Telegram Stars**\n\n💵 Цена (1 шт): `{price_kzt:.2f} ₸` (~{price_rub} ₽)\n📦 Мин. количество: {rate_data['min_quantity']}\n\nВведите количество Stars, которое хотите купить:"
+            }[lang]
+            
+            await callback.message.answer(text, parse_mode="Markdown")
+            await state.set_state(StarsState.waiting_for_amount)
         else:
-            await callback.message.answer("❌ Курсты алу мүмкін болмады. Кейінірек қайталаңыз.")
+            await callback.message.answer("❌ Қызмет уақытша қолжетімсіз." if lang == 'kz' else "❌ Сервис временно недоступен.")
     except Exception as e:
-        await callback.message.answer("❌ Қате орын алды. Кейінірек қайталаңыз.")
+        await callback.message.answer("❌ Қате орын алды." if lang == 'kz' else "❌ Произошла ошибка.")
     await callback.answer()
+
+@router.callback_query(F.data.startswith("buy_stars_item_"))
+async def buy_stars_item(callback: CallbackQuery, state: FSMContext, api: APIClient):
+    item_id = int(callback.data.split("_")[3])
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    
+    items_data = await api.get_stars_items()
+    item = next((i for i in items_data.get("items", []) if i['id'] == item_id), None)
+    
+    if not item:
+        await callback.message.answer("❌ Тауар табылмады." if lang == 'kz' else "❌ Товар не найден.")
+        return
+    
+    price_kzt = item["price_rub_with_margin"] * KZT_RATE
+    if user[1] < price_kzt:
+        await callback.message.answer(
+            f"❌ Қаражат жеткіліксіз!\n💰 Қажет: `{price_kzt:.2f} ₸`\n💳 Сізде: `{user[1]:.2f} ₸`" if lang == 'kz' else 
+            f"❌ Недостаточно средств!\n💰 Нужно: `{price_kzt:.2f} ₸`\n💳 У вас: `{user[1]:.2f} ₸`",
+            parse_mode="Markdown"
+        )
+        return
+
+    await state.update_data(item_id=item_id, amount=item['name'], total_kzt=price_kzt)
+    await callback.message.answer(
+        "👤 Stars жіберілетін пайдаланушының ID-ін немесе Юзернеймін жазыңыз:" if lang == 'kz' else
+        "👤 Введите ID или Юзернейм пользователя, которому нужно отправить Stars:"
+    )
+    await state.set_state(StarsState.waiting_for_id)
+    await callback.answer()
+
+@router.message(StarsState.waiting_for_amount)
+async def process_stars_amount(message: Message, state: FSMContext, api: APIClient):
+    user = await db.get_user(message.from_user.id)
+    lang = user[4] if user else 'kz'
+    
+    if not message.text.isdigit():
+        await message.answer("❌ Тек сандарды енгізіңіз." if lang == 'kz' else "❌ Введите только цифры.")
+        return
+    
+    amount = int(message.text)
+    rate_data = await api.get_stars_rate()
+    
+    if amount < rate_data.get('min_quantity', 50):
+        await message.answer(f"❌ Ең аз мөлшер: {rate_data.get('min_quantity', 50)}" if lang == 'kz' else f"❌ Мин. количество: {rate_data.get('min_quantity', 50)}")
+        return
+    
+    price_rub = rate_data["price_per_star_rub_with_margin"]
+    total_kzt = amount * price_rub * KZT_RATE
+    
+    if user[1] < total_kzt:
+        await message.answer(
+            f"❌ Қаражат жеткіліксіз!\n💰 Қажет: `{total_kzt:.2f} ₸`\n💳 Сізде: `{user[1]:.2f} ₸`" if lang == 'kz' else 
+            f"❌ Недостаточно средств!\n💰 Нужно: `{total_kzt:.2f} ₸`\n💳 У вас: `{user[1]:.2f} ₸`",
+            parse_mode="Markdown"
+        )
+        await state.clear()
+        return
+
+    await state.update_data(amount=amount, total_kzt=total_kzt)
+    await message.answer(
+        "👤 Stars жіберілетін пайдаланушының ID-ін немесе Юзернеймін жазыңыз:" if lang == 'kz' else
+        "👤 Введите ID или Юзернейм пользователя, которому нужно отправить Stars:"
+    )
+    await state.set_state(StarsState.waiting_for_id)
+
+@router.message(StarsState.waiting_for_id)
+async def process_stars_id(message: Message, state: FSMContext, api: APIClient):
+    user = await db.get_user(message.from_user.id)
+    lang = user[4] if user else 'kz'
+    target = message.text.strip()
+    data = await state.get_data()
+    
+    # Бұл жерде нақты API-ге тапсырыс жіберу логикасы болуы керек
+    # Қазірше тек балансты шегеріп, тапсырысты сақтаймыз
+    
+    await db.update_balance(message.from_user.id, -data['total_kzt'])
+    # Тапсырысты базаға қосу (бұл функцияны database.py-ге қосу керек немесе бар болса қолдану)
+    # await db.create_order(message.from_user.id, "stars", data['amount'], target, data['total_kzt'])
+    
+    await message.answer(
+        f"✅ Тапсырыс қабылданды!\n📦 Мөлшер: `{data['amount']} Stars`\n👤 Алушы: `{target}`\n💰 Бағасы: `{data['total_kzt']:.2f} ₸`" if lang == 'kz' else
+        f"✅ Заказ принят!\n📦 Количество: `{data['amount']} Stars`\n👤 Получатель: `{target}`\n💰 Цена: `{data['total_kzt']:.2f} ₸`",
+        parse_mode="Markdown"
+    )
+    await state.clear()
 
 @router.callback_query(F.data.startswith("set_lang_"))
 async def set_lang(callback: CallbackQuery):

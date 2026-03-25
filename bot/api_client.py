@@ -61,6 +61,25 @@ class APIClient:
                     return self._stars_rate_cache
                 raise
 
+    async def get_stars_items(self) -> Dict[str, Any]:
+        async with self.limiter:
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        f"{self.base_url}/api/v1/client/stars/items",
+                        headers=self.headers,
+                        timeout=10
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                    if data.get("success") and "items" in data:
+                        for item in data["items"]:
+                            if "price_rub" in item:
+                                item["price_rub_with_margin"] = self._apply_margin(item["price_rub"])
+                    return data
+            except Exception:
+                return {"success": False}
+
     async def get_order_status(self, order_id: int) -> Dict[str, Any]:
         async with self.limiter:
             async with httpx.AsyncClient() as client:

@@ -58,6 +58,19 @@ def nft_rental_kb(lang: str = 'kz'):
     builder.adjust(2, 1, 1)
     return builder.as_markup()
 
+def stars_items_kb(items: list, lang: str = 'kz'):
+    builder = InlineKeyboardBuilder()
+    for item in items:
+        # item: {id, name, price_rub_with_margin}
+        builder.button(text=f"{item['name']}", callback_data=f"buy_stars_item_{item['id']}")
+    
+    if lang == 'kz':
+        builder.button(text="‹ Мәзірге", callback_data="back_to_main")
+    else:
+        builder.button(text="‹ В меню", callback_data="back_to_main")
+    builder.adjust(2)
+    return builder.as_markup()
+
 def profile_kb():
     builder = InlineKeyboardBuilder()
     builder.button(text="💰 Толтыру (₸)", callback_data="topup")
