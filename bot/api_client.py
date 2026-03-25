@@ -102,14 +102,18 @@ class APIClient:
             except Exception as e:
                 return {"success": False, "error": str(e)}
 
-    async def get_nft_list(self, collection_address: str) -> Dict[str, Any]:
+    async def get_nft_list(self, collection_address: str, cursor: Optional[str] = None) -> Dict[str, Any]:
         async with self.limiter:
             try:
+                params = {"collection_address": collection_address}
+                if cursor:
+                    params["cursor"] = cursor
+                    
                 async with httpx.AsyncClient() as client:
                     response = await client.get(
                         f"{self.base_url}/api/v1/client/rent/nft/list",
                         headers=self.headers,
-                        params={"collection_address": collection_address},
+                        params=params,
                         timeout=15
                     )
                     data = response.json()

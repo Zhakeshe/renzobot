@@ -406,7 +406,7 @@ async def show_nft_rental_menu(callback: CallbackQuery, api: APIClient):
             builder = InlineKeyboardBuilder()
             
             for col in collections_res.get("collections", []):
-                builder.button(text=f"🖼 {col['name']}", callback_data=f"nft_col_{col['address']}")
+                builder.button(text=f"🖼 {col['name']}", callback_data=f"nc_{col['address']}")
             
             builder.button(text="‹ Мәзірге / В меню", callback_data="back_to_main")
             builder.adjust(1)
@@ -435,25 +435,44 @@ async def back_to_main(callback: CallbackQuery):
     )
     await callback.answer()
 
-@router.callback_query(F.data.startswith("nft_col_"))
+@router.callback_query(F.data.startswith("nc_"))
 async def show_nft_items(callback: CallbackQuery, api: APIClient):
-    collection_address = callback.data.split("_")[2]
+    parts = callback.data.split("_")
+    collection_address = parts[1]
+    cursor = parts[2] if len(parts) > 2 else None
+    
     user = await db.get_user(callback.from_user.id)
     lang = user[4] if user else 'kz'
     
     try:
         # Тауарлар тізімін алу
-        data = await api.get_nft_list(collection_address)
+        data = await api.get_nft_list(collection_address, cursor)
         if data.get("success"):
-            if data.get("items"):
+            items = data.get("items", [])
+            if items:
+                # Telegram-ның "markup too long" қатесін болдырмау үшін бір бетте 10 тауардан артық көрсетпейміз
+                MAX_ITEMS_PER_PAGE = 10
+                current_items = items[:MAX_ITEMS_PER_PAGE]
+                
                 items_text = ""
                 from aiogram.utils.keyboard import InlineKeyboardBuilder
                 builder = InlineKeyboardBuilder()
                 
-                for item in data["items"]:
+                for item in current_items:
                     price_kzt = item["price_per_day_rub_with_margin"] * KZT_RATE
-                    items_text += f"🔹 `{item['name']}` — `{price_kzt:.2f} ₸/күн` (ID: `{item['id']}`)\n"
-                    builder.button(text=f"Жалға алу: {item['name']}", callback_data=f"rent_item_{item['address']}")
+                    items_text += f"🔹 `{item['name']}` — `{price_kzt:.2f} ₸/күн`\n"
+                    # ri_ (rent item) - қысқарақ callback_data үшін
+                    builder.button(text=f"Жалға алу: {item['name']}", callback_data=f"ri_{item['address']}")
+                
+                # Келесі бет (пагинация)
+                next_cursor = data.get("cursor")
+                if next_cursor:
+                    # Егер келесі бет болса, батырма қосамыз
+                    # Ескерту: cursor тым ұзын болса, Telegram қате беруі мүмкін
+                    # Сондықтан callback_data ұзындығын тексереміз
+                    cb_data = f"nc_{collection_address}_{next_cursor}"
+                    if len(cb_data.encode('utf-8')) <= 64:
+                        builder.button(text="➡️ Келесі / Далее", callback_data=cb_data)
                 
                 builder.button(text="‹ Артқа / Назад", callback_data="rent_nft")
                 builder.adjust(1)
@@ -474,9 +493,9 @@ async def show_nft_items(callback: CallbackQuery, api: APIClient):
     
     await callback.answer()
 
-@router.callback_query(F.data.startswith("rent_item_"))
+@router.callback_query(F.data.startswith("ri_"))
 async def start_nft_rent(callback: CallbackQuery, state: FSMContext, api: APIClient):
-    nft_address = callback.data.split("_")[2]
+    nft_address = callback.data.split("_")[1]
     user = await db.get_user(callback.from_user.id)
     lang = user[4] if user else 'kz'
     
@@ -524,7 +543,7 @@ async def process_nft_days(message: Message, state: FSMContext, api: APIClient):
         
         from aiogram.utils.keyboard import InlineKeyboardBuilder
         builder = InlineKeyboardBuilder()
-        builder.button(text="🔗 TON Connect қосу / Подключить", callback_data=f"connect_nft_{data['nft_address']}")
+        builder.button(text="🔗 TON Connect қосу / Подключить", callback_data=f"cn_{data['nft_address']}")
         
         await message.answer(
             f"✅ **Жалдау сәтті орындалды!**\n\n"
@@ -541,9 +560,9 @@ async def process_nft_days(message: Message, state: FSMContext, api: APIClient):
         
     await state.clear()
 
-@router.callback_query(F.data.startswith("connect_nft_"))
+@router.callback_query(F.data.startswith("cn_"))
 async def start_connect_nft(callback: CallbackQuery, state: FSMContext):
-    nft_address = callback.data.split("_")[2]
+    nft_address = callback.data.split("_")[1]
     user = await db.get_user(callback.from_user.id)
     lang = user[4] if user else 'kz'
     
