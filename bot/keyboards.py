@@ -2,31 +2,31 @@ from aiogram import types
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 def main_menu_kb(is_admin: bool = False, lang: str = 'kz'):
-    builder = ReplyKeyboardBuilder()
+    builder = InlineKeyboardBuilder()
     if lang == 'kz':
-        builder.button(text="🌟 Stars сатып алу")
-        builder.button(text="💎 Telegram Premium")
-        builder.button(text="🏠 NFT жалдау")
-        builder.button(text="👤 Профиль")
-        builder.button(text="👥 Реферал")
-        builder.button(text="🛠 Қолдау")
-        builder.button(text="🎁 Промокод")
-        builder.button(text="🌍 Тілді өзгерту")
+        builder.button(text="🌟 Stars сатып алу", callback_data="buy_stars")
+        builder.button(text="💎 Telegram Premium", callback_data="buy_premium")
+        builder.button(text="🏠 NFT жалдау", callback_data="rent_nft")
+        builder.button(text="👤 Профиль", callback_data="profile")
+        builder.button(text="👥 Реферал", callback_data="referral")
+        builder.button(text="🛠 Қолдау", callback_data="support")
+        builder.button(text="🎁 Промокод", callback_data="promocode")
+        builder.button(text="🌍 Тілді өзгерту", callback_data="change_lang")
     else:
-        builder.button(text="🌟 Купить Stars")
-        builder.button(text="💎 Telegram Premium")
-        builder.button(text="🏠 Аренда NFT")
-        builder.button(text="👤 Профиль")
-        builder.button(text="👥 Реферал")
-        builder.button(text="🛠 Поддержка")
-        builder.button(text="🎁 Промокод")
-        builder.button(text="🌍 Сменить язык")
+        builder.button(text="🌟 Купить Stars", callback_data="buy_stars")
+        builder.button(text="💎 Telegram Premium", callback_data="buy_premium")
+        builder.button(text="🏠 Аренда NFT", callback_data="rent_nft")
+        builder.button(text="👤 Профиль", callback_data="profile")
+        builder.button(text="👥 Реферал", callback_data="referral")
+        builder.button(text="🛠 Поддержка", callback_data="support")
+        builder.button(text="🎁 Промокод", callback_data="promocode")
+        builder.button(text="🌍 Сменить язык", callback_data="change_lang")
         
-    builder.button(text="🖥 Web App", web_app=types.WebAppInfo(url="https://your-app-url.run.app"))
+    builder.button(text="🖥 Web App", web_app=types.WebAppInfo(url="https://ais-dev-rtojpzn754reldc7yedx5e-747018559939.run.app"))
     if is_admin:
-        builder.button(text="📊 Админ панель")
+        builder.button(text="📊 Админ панель", callback_data="admin_panel")
     builder.adjust(2)
-    return builder.as_markup(resize_keyboard=True)
+    return builder.as_markup()
 
 def language_kb():
     builder = InlineKeyboardBuilder()

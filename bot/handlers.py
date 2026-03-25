@@ -3,7 +3,7 @@ from aiogram.filters import CommandStart
 from aiogram.types import Message, CallbackQuery
 from database import Database
 from api_client import APIClient
-from keyboards import main_menu_kb, profile_kb
+from keyboards import main_menu_kb, profile_kb, language_kb, admin_kb
 import os
 
 router = Router()
@@ -53,9 +53,58 @@ async def cmd_start(message: Message):
         reply_markup=main_menu_kb(is_admin, lang)
     )
 
-@router.message(F.text.in_(["🌍 Тілді өзгерту", "🌍 Сменить язык"]))
-async def change_lang(message: Message):
-    await message.answer("Тілді таңдаңыз / Выберите язык:", reply_markup=language_kb())
+@router.callback_query(F.data == "change_lang")
+async def change_lang(callback: CallbackQuery):
+    await callback.message.answer("Тілді таңдаңыз / Выберите язык:", reply_markup=language_kb())
+    await callback.answer()
+
+@router.callback_query(F.data == "admin_panel", F.from_user.id == ADMIN_ID)
+async def admin_panel(callback: CallbackQuery):
+    users, sales = await db.get_stats()
+    profit = await db.get_profit_stats()
+    await callback.message.answer(
+        f"📊 **Админ панель**\n\n"
+        f"👥 Пайдаланушылар: {users}\n"
+        f"💰 Жалпы сауда: {sales:.2f} ₸\n"
+        f"📈 Таза пайда: {profit:.2f} ₸",
+        reply_markup=admin_kb()
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "profile")
+async def show_profile(callback: CallbackQuery):
+    user = await db.get_user(callback.from_user.id)
+    if user:
+        balance = user[1]
+        await callback.message.answer(
+            f"👤 **Профиль**\n\n"
+            f"🆔 ID: `{callback.from_user.id}`\n"
+            f"💰 Теңгерім: `{balance:.2f} ₸`",
+            reply_markup=profile_kb(),
+            parse_mode="Markdown"
+        )
+    await callback.answer()
+
+@router.callback_query(F.data == "buy_stars")
+async def buy_stars_info(callback: CallbackQuery, api: APIClient):
+    try:
+        rate_data = await api.get_stars_rate()
+        if rate_data.get("success"):
+            price_rub = rate_data["price_per_star_rub_with_margin"]
+            price_kzt = price_rub * KZT_RATE
+            
+            await callback.message.answer(
+                f"🌟 **Telegram Stars сатып алу**\n\n"
+                f"💵 Бағасы (1 дана): `{price_kzt:.2f} ₸` (~{price_rub} ₽)\n"
+                f"📦 Ең аз мөлшер: {rate_data['min_quantity']}\n\n"
+                "Сатып алғыңыз келетін Stars мөлшерін енгізіңіз:",
+                parse_mode="Markdown"
+            )
+        else:
+            await callback.message.answer("❌ Курсты алу мүмкін болмады. Кейінірек қайталаңыз.")
+    except Exception as e:
+        await callback.message.answer("❌ Қате орын алды. Кейінірек қайталаңыз.")
+    await callback.answer()
 
 @router.callback_query(F.data.startswith("set_lang_"))
 async def set_lang(callback: CallbackQuery):
@@ -63,51 +112,24 @@ async def set_lang(callback: CallbackQuery):
     await db.set_language(callback.from_user.id, lang)
     await callback.message.edit_text(TEXTS[lang]['lang_changed'])
     await callback.message.answer(TEXTS[lang]['start'].format(name=callback.from_user.full_name), reply_markup=main_menu_kb(callback.from_user.id == ADMIN_ID, lang))
+    await callback.answer()
 
-@router.message(F.text == "📊 Админ панель", F.from_user.id == ADMIN_ID)
-async def admin_panel(message: Message):
-    users, sales = await db.get_stats()
-    profit = await db.get_profit_stats()
-    await message.answer(
-        f"📊 **Админ панель**\n\n"
-        f"👥 Пайдаланушылар: {users}\n"
-        f"💰 Жалпы сауда: {sales:.2f} ₸\n"
-        f"📈 Таза пайда: {profit:.2f} ₸",
-        reply_markup=admin_kb()
-    )
+@router.callback_query(F.data == "referral")
+async def show_referral(callback: CallbackQuery):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    link = f"https://t.me/renzonftbot?start={callback.from_user.id}"
+    await callback.message.answer(TEXTS[lang]['ref'].format(link=link))
+    await callback.answer()
 
-@router.callback_query(F.data == "admin_broadcast", F.from_user.id == ADMIN_ID)
-async def start_broadcast(callback: CallbackQuery):
-    await callback.message.answer(TEXTS['kz']['broadcast_prompt'])
-    # Мұнда күту режимін (FSM) қосу керек, бірақ мысал үшін жай ғана көрсетілді
+@router.callback_query(F.data == "support")
+async def show_support(callback: CallbackQuery):
+    await callback.message.answer("🛠 Қолдау қызметі: @renzo_support")
+    await callback.answer()
 
-@router.message(F.text == "👤 Профиль")
-async def show_profile(message: Message):
-    user = await db.get_user(message.from_user.id)
-    if user:
-        balance = user[1]
-        await message.answer(
-            f"👤 **Профиль**\n\n"
-            f"🆔 ID: `{message.from_user.id}`\n"
-            f"💰 Теңгерім: `{balance:.2f} ₸`",
-            reply_markup=profile_kb(),
-            parse_mode="Markdown"
-        )
-
-@router.message(F.text == "🌟 Stars сатып алу")
-async def buy_stars_info(message: Message, api: APIClient):
-    rate_data = await api.get_stars_rate()
-    if rate_data.get("success"):
-        # api_client ішінде MARGIN автоматты түрде қосылған
-        price_rub = rate_data["price_per_star_rub_with_margin"]
-        price_kzt = price_rub * KZT_RATE
-        
-        await message.answer(
-            f"🌟 **Telegram Stars сатып алу**\n\n"
-            f"💵 Бағасы (1 дана): `{price_kzt:.2f} ₸` (~{price_rub} ₽)\n"
-            f"📦 Ең аз мөлшер: {rate_data['min_quantity']}\n\n"
-            "Сатып алғыңыз келетін Stars мөлшерін енгізіңіз:",
-            parse_mode="Markdown"
-        )
-    else:
-        await message.answer("❌ Курсты алу мүмкін болмады. Кейінірек қайталаңыз.")
+@router.callback_query(F.data == "promocode")
+async def show_promocode(callback: CallbackQuery):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    await callback.message.answer(TEXTS[lang]['promo_prompt'])
+    await callback.answer()
