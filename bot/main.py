@@ -2,9 +2,9 @@ import asyncio
 import logging
 import sys
 from aiogram import Bot, Dispatcher
-from bot.handlers import router
-from bot.api_client import APIClient
-from bot.database import Database
+from handlers import router
+from api_client import APIClient
+from database import Database
 
 import os
 from dotenv import load_dotenv

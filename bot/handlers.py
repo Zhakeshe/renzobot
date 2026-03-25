@@ -1,9 +1,9 @@
 from aiogram import Router, F
 from aiogram.filters import CommandStart
 from aiogram.types import Message, CallbackQuery
-from bot.database import Database
-from bot.api_client import APIClient
-from bot.keyboards import main_menu_kb, profile_kb
+from database import Database
+from api_client import APIClient
+from keyboards import main_menu_kb, profile_kb
 import os
 
 router = Router()
