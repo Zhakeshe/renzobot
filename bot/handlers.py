@@ -5,7 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from database import Database
 from api_client import APIClient
-from keyboards import main_menu_kb, profile_kb, language_kb, admin_kb, nft_rental_kb, stars_items_kb
+from keyboards import main_menu_kb, profile_kb, language_kb, admin_kb, stars_items_kb
 import os
 from dotenv import load_dotenv
 
@@ -395,14 +395,33 @@ async def process_premium_id(message: Message, state: FSMContext, api: APIClient
     await state.clear()
 
 @router.callback_query(F.data == "rent_nft")
-async def show_nft_rental_menu(callback: CallbackQuery):
+async def show_nft_rental_menu(callback: CallbackQuery, api: APIClient):
     user = await db.get_user(callback.from_user.id)
     lang = user[4] if user else 'kz'
-    await callback.message.edit_text(
-        TEXTS[lang]['nft_rental_menu'],
-        reply_markup=nft_rental_kb(lang),
-        parse_mode="Markdown"
-    )
+    
+    try:
+        collections_res = await api.get_nft_collections()
+        if collections_res.get("success"):
+            from aiogram.utils.keyboard import InlineKeyboardBuilder
+            builder = InlineKeyboardBuilder()
+            
+            for col in collections_res.get("collections", []):
+                builder.button(text=f"🖼 {col['name']}", callback_data=f"nft_col_{col['address']}")
+            
+            builder.button(text="‹ Мәзірге / В меню", callback_data="back_to_main")
+            builder.adjust(1)
+            
+            await callback.message.edit_text(
+                TEXTS[lang]['nft_rental_menu'],
+                reply_markup=builder.as_markup(),
+                parse_mode="Markdown"
+            )
+        else:
+            error = collections_res.get("error", "Unknown error")
+            await callback.message.answer(f"❌ Қате: {error}")
+    except Exception as e:
+        await callback.message.answer(f"❌ Қате: {str(e)}")
+    
     await callback.answer()
 
 @router.callback_query(F.data == "back_to_main")
@@ -416,34 +435,15 @@ async def back_to_main(callback: CallbackQuery):
     )
     await callback.answer()
 
-@router.callback_query(F.data.startswith("nft_"))
+@router.callback_query(F.data.startswith("nft_col_"))
 async def show_nft_items(callback: CallbackQuery, api: APIClient):
-    nft_type = callback.data.split("_")[1] # gifts, usernames, numbers
+    collection_address = callback.data.split("_")[2]
     user = await db.get_user(callback.from_user.id)
     lang = user[4] if user else 'kz'
     
     try:
-        # 1. Коллекцияларды алу
-        collections_res = await api.get_nft_collections()
-        if not collections_res.get("success"):
-            await callback.message.answer("❌ Коллекцияларды алу мүмкін болмады." if lang == 'kz' else "❌ Не удалось получить коллекции.")
-            return
-        
-        # 2. Керекті коллекцияны табу
-        target_name_part = {
-            "gifts": "Gifts",
-            "usernames": "Usernames",
-            "numbers": "Numbers"
-        }[nft_type]
-        
-        collection = next((c for c in collections_res.get("collections", []) if target_name_part.lower() in c.get("name", "").lower()), None)
-        
-        if not collection:
-            await callback.message.answer("❌ Бұл санатта тауарлар табылмады." if lang == 'kz' else "❌ В этой категории товаров не найдено.")
-            return
-            
-        # 3. Тауарлар тізімін алу
-        data = await api.get_nft_list(collection["address"])
+        # Тауарлар тізімін алу
+        data = await api.get_nft_list(collection_address)
         if data.get("success"):
             if data.get("items"):
                 items_text = ""
@@ -455,17 +455,12 @@ async def show_nft_items(callback: CallbackQuery, api: APIClient):
                     items_text += f"🔹 `{item['name']}` — `{price_kzt:.2f} ₸/күн` (ID: `{item['id']}`)\n"
                     builder.button(text=f"Жалға алу: {item['name']}", callback_data=f"rent_item_{item['address']}")
                 
-                builder.button(text="‹ Артқа", callback_data="rent_nft")
+                builder.button(text="‹ Артқа / Назад", callback_data="rent_nft")
                 builder.adjust(1)
                 
-                type_label = {
-                    "gifts": "Подарки",
-                    "usernames": "Юзернеймдер" if lang == 'kz' else "Юзернеймы",
-                    "numbers": "Номерлер" if lang == 'kz' else "Номера"
-                }[nft_type]
-                
-                await callback.message.answer(
-                    TEXTS[lang]['nft_list'].format(type=type_label, items=items_text),
+                await callback.message.edit_text(
+                    f"📦 **Қолжетімді тауарлар:**\n\n{items_text}\n\nСатып алу үшін таңдаңыз 👇" if lang == 'kz' else
+                    f"📦 **Доступные товары:**\n\n{items_text}\n\nВыберите для покупки 👇",
                     reply_markup=builder.as_markup(),
                     parse_mode="Markdown"
                 )
