@@ -7,6 +7,7 @@ from database import Database
 from api_client import APIClient
 from keyboards import main_menu_kb, profile_kb, language_kb, admin_kb, nft_rental_kb
 import os
+from dotenv import load_dotenv
 
 router = Router()
 db = Database()
