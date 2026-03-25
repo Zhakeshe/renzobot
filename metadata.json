@@ -1,0 +1,5 @@
+{
+  "name": "Digital Goods Reseller Bot",
+  "description": "Telegram bot for reselling Stars, Premium and NFT with KZT balance and Web App interface.",
+  "requestFramePermissions": []
+}
