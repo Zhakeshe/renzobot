@@ -31,6 +31,16 @@ class NFTState(StatesGroup):
     waiting_for_address = State()
     waiting_for_ton_connect = State()
 
+class AdminState(StatesGroup):
+    waiting_for_balance = State()
+    waiting_for_rate = State()
+    waiting_for_broadcast = State()
+
+class SupportState(StatesGroup):
+    waiting_for_subject = State()
+    waiting_for_message = State()
+    waiting_for_reply = State()
+
 load_dotenv()
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
@@ -105,6 +115,159 @@ async def change_lang(callback: CallbackQuery):
     await callback.message.answer("Тілді таңдаңыз / Выберите язык:", reply_markup=language_kb())
     await callback.answer()
 
+@router.callback_query(F.data == "support")
+async def support_menu(callback: CallbackQuery):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    text = "🛠 **Қолдау орталығы**\n\nСұрақтарыңыз болса тикет ашыңыз немесе бұрынғы тикеттерді көріңіз." if lang == 'kz' else "🛠 **Центр поддержки**\n\nЕсли у вас есть вопросы, откройте тикет или просмотрите предыдущие."
+    from keyboards import support_kb
+    await callback.message.edit_text(text, reply_markup=support_kb(lang), parse_mode="Markdown")
+    await callback.answer()
+
+@router.callback_query(F.data == "support_new")
+async def support_new(callback: CallbackQuery, state: FSMContext):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    text = "📝 Сұрағыңыздың тақырыбын жазыңыз:" if lang == 'kz' else "📝 Введите тему вашего вопроса:"
+    await callback.message.answer(text)
+    await state.set_state(SupportState.waiting_for_subject)
+    await callback.answer()
+
+@router.message(SupportState.waiting_for_subject)
+async def process_subject(message: Message, state: FSMContext):
+    await state.update_data(subject=message.text)
+    user = await db.get_user(message.from_user.id)
+    lang = user[4] if user else 'kz'
+    text = "💬 Енді сұрағыңызды толық жазыңыз:" if lang == 'kz' else "💬 Теперь опишите ваш вопрос подробно:"
+    await message.answer(text)
+    await state.set_state(SupportState.waiting_for_message)
+
+@router.message(SupportState.waiting_for_message)
+async def process_message(message: Message, state: FSMContext):
+    data = await state.get_data()
+    subject = data['subject']
+    text = message.text
+    
+    ticket_id = await db.create_ticket(message.from_user.id, subject)
+    await db.add_ticket_message(ticket_id, message.from_user.id, text)
+    
+    user = await db.get_user(message.from_user.id)
+    lang = user[4] if user else 'kz'
+    
+    success_text = f"✅ Тикет #{ticket_id} сәтті ашылды! Админ жауабын күтіңіз." if lang == 'kz' else f"✅ Тикет #{ticket_id} успешно открыт! Ожидайте ответа админа."
+    await message.answer(success_text)
+    
+    # Notify admin
+    try:
+        await message.bot.send_message(ADMIN_ID, f"🆕 **Жаңа тикет!**\n\n🆔 #{ticket_id}\n👤 Пайдаланушы: @{message.from_user.username or message.from_user.id}\n📝 Тақырыбы: {subject}\n\nКөру үшін: /ticket_{ticket_id}")
+    except: pass
+    
+    await state.clear()
+
+@router.callback_query(F.data == "support_list")
+async def support_list(callback: CallbackQuery):
+    tickets = await db.get_user_tickets(callback.from_user.id)
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    
+    if not tickets:
+        await callback.message.answer("📭 Сізде әлі тикеттер жоқ." if lang == 'kz' else "📭 У вас еще нет тикетов.")
+        return
+        
+    text = "📂 **Сіздің тикеттеріңіз:**" if lang == 'kz' else "📂 **Ваши тикеты:**"
+    from keyboards import tickets_list_kb
+    await callback.message.edit_text(text, reply_markup=tickets_list_kb(tickets), parse_mode="Markdown")
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("ticket_view_"))
+async def ticket_view(callback: CallbackQuery):
+    ticket_id = int(callback.data.split("_")[2])
+    ticket = await db.get_ticket(ticket_id)
+    messages = await db.get_ticket_messages(ticket_id)
+    
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    is_admin = callback.from_user.id == ADMIN_ID
+    
+    status_text = "Ашық" if ticket[3] == 'open' else "Жауап берілді" if ticket[3] == 'answered' else "Жабық"
+    text = f"🎫 **Тикет #{ticket_id}**\n📝 Тақырыбы: {ticket[2]}\n📊 Статусы: {status_text}\n\n💬 **Сөйлесу тарихы:**\n"
+    
+    for msg in messages:
+        sender = "👤 Сіз" if msg[2] == callback.from_user.id else "👨‍💻 Админ"
+        if is_admin:
+            sender = "👤 Пайдаланушы" if msg[2] != ADMIN_ID else "👨‍💻 Сіз"
+        text += f"\n**{sender}:**\n{msg[3]}\n"
+    
+    from keyboards import ticket_actions_kb
+    await callback.message.edit_text(text, reply_markup=ticket_actions_kb(ticket_id, is_admin, ticket[3]), parse_mode="Markdown")
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("ticket_reply_"))
+async def ticket_reply(callback: CallbackQuery, state: FSMContext):
+    ticket_id = int(callback.data.split("_")[2])
+    await state.update_data(reply_ticket_id=ticket_id)
+    
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    
+    await callback.message.answer("💬 Жауабыңызды жазыңыз:" if lang == 'kz' else "💬 Введите ваш ответ:")
+    await state.set_state(SupportState.waiting_for_reply)
+    await callback.answer()
+
+@router.message(SupportState.waiting_for_reply)
+async def process_reply(message: Message, state: FSMContext):
+    data = await state.get_data()
+    ticket_id = data['reply_ticket_id']
+    text = message.text
+    
+    await db.add_ticket_message(ticket_id, message.from_user.id, text)
+    
+    ticket = await db.get_ticket(ticket_id)
+    is_admin = message.from_user.id == ADMIN_ID
+    
+    if is_admin:
+        await db.update_ticket_status(ticket_id, 'answered')
+        # Notify user
+        try:
+            await message.bot.send_message(ticket[1], f"👨‍💻 **Админ тикетке жауап берді!**\n\n🆔 #{ticket_id}\n📝 Тақырыбы: {ticket[2]}\n\nКөру үшін профильге өтіңіз.")
+        except: pass
+    else:
+        await db.update_ticket_status(ticket_id, 'open')
+        # Notify admin
+        try:
+            await message.bot.send_message(ADMIN_ID, f"💬 **Тикетке жаңа жауап!**\n\n🆔 #{ticket_id}\n👤 Пайдаланушы: @{message.from_user.username or message.from_user.id}\n\nКөру үшін: /ticket_{ticket_id}")
+        except: pass
+        
+    await message.answer("✅ Жауап жіберілді!")
+    await state.clear()
+
+@router.callback_query(F.data.startswith("ticket_close_"))
+async def ticket_close(callback: CallbackQuery):
+    ticket_id = int(callback.data.split("_")[2])
+    await db.update_ticket_status(ticket_id, 'closed')
+    await callback.message.answer(f"✅ Тикет #{ticket_id} жабылды.")
+    await callback.answer()
+
+@router.message(F.text.startswith("/ticket_"))
+async def admin_ticket_view(message: Message):
+    if message.from_user.id != ADMIN_ID: return
+    ticket_id = int(message.text.split("_")[1])
+    
+    ticket = await db.get_ticket(ticket_id)
+    if not ticket: return
+    
+    messages = await db.get_ticket_messages(ticket_id)
+    
+    status_text = "Ашық" if ticket[3] == 'open' else "Жауап берілді" if ticket[3] == 'answered' else "Жабық"
+    text = f"🎫 **Тикет #{ticket_id}**\n👤 Пайдаланушы ID: `{ticket[1]}`\n📝 Тақырыбы: {ticket[2]}\n📊 Статусы: {status_text}\n\n💬 **Сөйлесу тарихы:**\n"
+    
+    for msg in messages:
+        sender = "👤 Пайдаланушы" if msg[2] != ADMIN_ID else "👨‍💻 Сіз"
+        text += f"\n**{sender}:**\n{msg[3]}\n"
+        
+    from keyboards import ticket_actions_kb
+    await message.answer(text, reply_markup=ticket_actions_kb(ticket_id, True, ticket[3]), parse_mode="Markdown")
+
 @router.callback_query(F.data == "admin_panel", F.from_user.id == ADMIN_ID)
 async def admin_panel(callback: CallbackQuery):
     users, sales = await db.get_stats()
@@ -117,6 +280,121 @@ async def admin_panel(callback: CallbackQuery):
         reply_markup=admin_kb()
     )
     await callback.answer()
+
+@router.callback_query(F.data == "admin_api_balance", F.from_user.id == ADMIN_ID)
+async def admin_api_balance(callback: CallbackQuery, api: APIClient):
+    try:
+        balance_data = await api.get_balance()
+        if balance_data.get("success"):
+            nano = balance_data.get("balance_nano", 0)
+            rub = api.nano_to_rub(nano)
+            await callback.message.answer(f"💳 **API Теңгерім:**\n\n`{rub:.2f} ₽` (`{nano} nano`)")
+        else:
+            await callback.message.answer(f"❌ Қате: {balance_data.get('error')}")
+    except Exception as e:
+        await callback.message.answer(f"❌ Қате: {str(e)}")
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("admin_users_"), F.from_user.id == ADMIN_ID)
+async def admin_users_list(callback: CallbackQuery):
+    offset = int(callback.data.split("_")[2])
+    users = await db.get_users_paged(10, offset)
+    from keyboards import admin_users_kb
+    await callback.message.edit_text("👥 **Пайдаланушылар тізімі:**", reply_markup=admin_users_kb(users, offset))
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("admin_user_"), F.from_user.id == ADMIN_ID)
+async def admin_user_detail(callback: CallbackQuery):
+    user_id = int(callback.data.split("_")[2])
+    user = await db.get_user(user_id)
+    if not user:
+        await callback.answer("❌ Пайдаланушы табылмады.")
+        return
+    
+    # user: (user_id, balance, username, referred_by, lang, ip, device, is_blocked, ref_bal, created_at)
+    status = "🚫 Блокталған" if user[7] else "✅ Белсенді"
+    text = (
+        f"👤 **Пайдаланушы ақпараты**\n\n"
+        f"🆔 ID: `{user[0]}`\n"
+        f"👤 Username: @{user[2] or 'жоқ'}\n"
+        f"💰 Баланс: `{user[1]:.2f} ₸`\n"
+        f"👥 Реферал баланс: `{user[8]:.2f} ₸`\n"
+        f"🌍 Тіл: {user[4]}\n"
+        f"📊 Статус: {status}\n"
+        f"📅 Тіркелді: {user[9]}\n"
+        f"🌐 IP: `{user[5] or 'белгісіз'}`\n"
+        f"📱 Device: `{user[6] or 'белгісіз'}`"
+    )
+    from keyboards import user_actions_kb
+    await callback.message.edit_text(text, reply_markup=user_actions_kb(user_id, user[7]), parse_mode="Markdown")
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("admin_edit_bal_"), F.from_user.id == ADMIN_ID)
+async def admin_edit_bal_start(callback: CallbackQuery, state: FSMContext):
+    user_id = int(callback.data.split("_")[3])
+    await state.update_data(edit_user_id=user_id)
+    await callback.message.answer("💰 Жаңа балансты енгізіңіз (₸):")
+    await state.set_state(AdminState.waiting_for_balance)
+    await callback.answer()
+
+@router.message(AdminState.waiting_for_balance, F.from_user.id == ADMIN_ID)
+async def admin_edit_bal_process(message: Message, state: FSMContext):
+    try:
+        new_balance = float(message.text)
+        data = await state.get_data()
+        user_id = data['edit_user_id']
+        await db.set_user_balance(user_id, new_balance)
+        await message.answer(f"✅ Пайдаланушы `{user_id}` балансы `{new_balance} ₸` болып өзгертілді.")
+        await state.clear()
+    except ValueError:
+        await message.answer("❌ Тек санды енгізіңіз.")
+
+@router.callback_query(F.data.startswith("admin_ban_"), F.from_user.id == ADMIN_ID)
+async def admin_ban(callback: CallbackQuery):
+    user_id = int(callback.data.split("_")[2])
+    await db.ban_user(user_id)
+    await callback.message.answer(f"🚫 Пайдаланушы `{user_id}` блоктауға жіберілді.")
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("admin_unban_"), F.from_user.id == ADMIN_ID)
+async def admin_unban(callback: CallbackQuery):
+    user_id = int(callback.data.split("_")[2])
+    await db.unban_user(user_id)
+    await callback.message.answer(f"✅ Пайдаланушы `{user_id}` блоктан шығарылды.")
+    await callback.answer()
+
+@router.callback_query(F.data == "admin_tickets", F.from_user.id == ADMIN_ID)
+async def admin_tickets_list(callback: CallbackQuery):
+    tickets = await db.get_all_tickets()
+    if not tickets:
+        await callback.message.answer("📭 Тикеттер жоқ.")
+        return
+    from keyboards import tickets_list_kb
+    await callback.message.edit_text("🎫 **Барлық тикеттер:**", reply_markup=tickets_list_kb(tickets, True))
+    await callback.answer()
+
+@router.callback_query(F.data == "admin_settings", F.from_user.id == ADMIN_ID)
+async def admin_settings(callback: CallbackQuery, state: FSMContext):
+    global KZT_RATE
+    await callback.message.answer(
+        f"⚙️ **Баптаулар**\n\n"
+        f"📈 Ағымдағы курс (RUB -> KZT): `{KZT_RATE}`\n\n"
+        f"Курсты өзгерту үшін жаңа мәнді жіберіңіз (мысалы: 5.5):",
+        parse_mode="Markdown"
+    )
+    await state.set_state(AdminState.waiting_for_rate)
+    await callback.answer()
+
+@router.message(AdminState.waiting_for_rate, F.from_user.id == ADMIN_ID)
+async def admin_edit_rate_process(message: Message, state: FSMContext):
+    global KZT_RATE
+    try:
+        new_rate = float(message.text)
+        KZT_RATE = new_rate
+        await message.answer(f"✅ Курс `{new_rate}` болып өзгертілді.")
+        await state.clear()
+    except ValueError:
+        await message.answer("❌ Тек санды енгізіңіз.")
 
 @router.callback_query(F.data == "profile")
 async def show_profile(callback: CallbackQuery):
@@ -394,44 +672,39 @@ async def process_premium_id(message: Message, state: FSMContext, api: APIClient
         
     await state.clear()
 
+def get_nft_link(name: str) -> str:
+    # Rare Bird #9797 -> RareBird-9797
+    # +888 1234 5678 -> 88812345678
+    # username -> username
+    clean_name = name.replace(" ", "").replace("#", "-").replace("+", "")
+    return f"https://t.me/nft/{clean_name}"
+
 @router.callback_query(F.data == "rent_nft")
-async def show_nft_rental_menu(callback: CallbackQuery, api: APIClient):
+async def show_nft_rental_menu(callback: CallbackQuery):
     user = await db.get_user(callback.from_user.id)
     lang = user[4] if user else 'kz'
     
-    try:
-        collections_res = await api.get_nft_collections()
-        if collections_res.get("success"):
-            from aiogram.utils.keyboard import InlineKeyboardBuilder
-            builder = InlineKeyboardBuilder()
-            
-            # Тек алғашқы 5 коллекцияны көрсетеміз (markup too long қатесін болдырмау үшін)
-            collections = collections_res.get("collections", [])[:5]
-            
-            for col in collections:
-                # Атын 15 символға дейін қысқартамыз
-                col_name = col['name']
-                if len(col_name) > 15:
-                    col_name = col_name[:12] + "..."
-                
-                cb_data = f"nc_{col['address']}"
-                if len(cb_data.encode('utf-8')) <= 64:
-                    builder.button(text=f"🖼 {col_name}", callback_data=cb_data)
-            
-            builder.button(text="‹ Мәзірге / В меню", callback_data="back_to_main")
-            builder.adjust(1)
-            
-            await callback.message.edit_text(
-                TEXTS[lang]['nft_rental_menu'],
-                reply_markup=builder.as_markup(),
-                parse_mode="Markdown"
-            )
-        else:
-            error = collections_res.get("error", "Unknown error")
-            await callback.message.answer(f"❌ Қате: {error}")
-    except Exception as e:
-        await callback.message.answer(f"❌ Қате: {str(e)}")
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    builder = InlineKeyboardBuilder()
     
+    if lang == 'kz':
+        builder.button(text="🎁 NFT-подарки", callback_data="nft_cat_gifts")
+        builder.button(text="👤 NFT-юзернеймдер", callback_data="nft_cat_usernames")
+        builder.button(text="☎️ NFT-номерлер", callback_data="nft_cat_numbers")
+        builder.button(text="‹ Мәзірге", callback_data="back_to_main")
+    else:
+        builder.button(text="🎁 NFT-подарки", callback_data="nft_cat_gifts")
+        builder.button(text="👤 NFT-юзернеймы", callback_data="nft_cat_usernames")
+        builder.button(text="☎️ NFT-номера", callback_data="nft_cat_numbers")
+        builder.button(text="‹ В меню", callback_data="back_to_main")
+        
+    builder.adjust(1)
+    
+    await callback.message.edit_text(
+        TEXTS[lang]['nft_rental_menu'],
+        reply_markup=builder.as_markup(),
+        parse_mode="Markdown"
+    )
     await callback.answer()
 
 @router.callback_query(F.data == "back_to_main")
@@ -445,26 +718,71 @@ async def back_to_main(callback: CallbackQuery):
     )
     await callback.answer()
 
-@router.callback_query(F.data.startswith("nc_"))
-async def show_nft_items(callback: CallbackQuery, state: FSMContext, api: APIClient):
-    parts = callback.data.split("_")
-    collection_address = parts[1]
-    cursor = parts[2] if len(parts) > 2 else None
-    
+@router.callback_query(F.data.startswith("nft_cat_"))
+async def show_nft_category(callback: CallbackQuery, api: APIClient, state: FSMContext):
+    category = callback.data.split("_")[2]
     user = await db.get_user(callback.from_user.id)
     lang = user[4] if user else 'kz'
     
     try:
-        # Тауарлар тізімін алу
+        collections_res = await api.get_nft_collections()
+        if not collections_res.get("success"):
+            await callback.answer("❌ Қате орын алды.")
+            return
+            
+        collections = collections_res.get("collections", [])
+        
+        if category == "gifts":
+            # Show collections that are NOT usernames or numbers
+            gift_collections = [c for c in collections if "username" not in c['name'].lower() and "number" not in c['name'].lower()]
+            
+            from aiogram.utils.keyboard import InlineKeyboardBuilder
+            builder = InlineKeyboardBuilder()
+            
+            for col in gift_collections[:10]: # Limit to 10
+                col_name = col['name']
+                if len(col_name) > 15:
+                    col_name = col_name[:12] + "..."
+                builder.button(text=f"🖼 {col_name}", callback_data=f"nc_{col['address']}")
+            
+            builder.button(text="‹ Артқа / Назад", callback_data="rent_nft")
+            builder.adjust(1)
+            
+            await callback.message.edit_text(
+                "🎁 **NFT-подарки**\n\nКоллекцияны таңдаңыз:" if lang == 'kz' else "🎁 **NFT-подарки**\n\nВыберите коллекцию:",
+                reply_markup=builder.as_markup(),
+                parse_mode="Markdown"
+            )
+        elif category == "usernames":
+            col = next((c for c in collections if "username" in c['name'].lower()), None)
+            if col:
+                await show_nft_items_internal(callback, col['address'], api, state)
+            else:
+                await callback.answer("❌ Табылмады." if lang == 'kz' else "❌ Не найдено.")
+        elif category == "numbers":
+            col = next((c for c in collections if "number" in c['name'].lower()), None)
+            if col:
+                await show_nft_items_internal(callback, col['address'], api, state)
+            else:
+                await callback.answer("❌ Табылмады." if lang == 'kz' else "❌ Не найдено.")
+                
+    except Exception as e:
+        await callback.message.answer(f"❌ Қате: {str(e)}")
+    
+    await callback.answer()
+
+async def show_nft_items_internal(callback: CallbackQuery, collection_address: str, api: APIClient, state: FSMContext, cursor: str = None):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    
+    try:
         data = await api.get_nft_list(collection_address, cursor)
         if data.get("success"):
             items = data.get("items", [])
             if items:
-                # Telegram-ның "markup too long" қатесін болдырмау үшін бір бетте 3 тауардан артық көрсетпейміз
                 MAX_ITEMS_PER_PAGE = 3
                 current_items = items[:MAX_ITEMS_PER_PAGE]
                 
-                # Сақтау үшін state-ке жазамыз (callback_data-ны қысқарту үшін)
                 await state.update_data(
                     current_collection=collection_address,
                     current_items=items,
@@ -477,12 +795,10 @@ async def show_nft_items(callback: CallbackQuery, state: FSMContext, api: APICli
                 
                 for idx, item in enumerate(current_items):
                     price_kzt = item["price_per_day_rub_with_margin"] * KZT_RATE
-                    items_text += f"🔹 `{item['name']}` — `{price_kzt:.2f} ₸/күн`\n"
-                    
-                    # Индекс арқылы callback_data (өте қысқа)
+                    link = get_nft_link(item['name'])
+                    items_text += f"🔹 [{item['name']}]({link}) — `{price_kzt:.2f} ₸/күн`\n"
                     builder.button(text=f"🛒 {item['name'][:15]}", callback_data=f"ri_{idx}")
                 
-                # Келесі бет (пагинация)
                 next_cursor = data.get("cursor")
                 if next_cursor:
                     builder.button(text="➡️ Келесі / Далее", callback_data="nft_next")
@@ -494,16 +810,23 @@ async def show_nft_items(callback: CallbackQuery, state: FSMContext, api: APICli
                     f"📦 **Қолжетімді тауарлар:**\n\n{items_text}\n\nСатып алу үшін таңдаңыз 👇" if lang == 'kz' else
                     f"📦 **Доступные товары:**\n\n{items_text}\n\nВыберите для покупки 👇",
                     reply_markup=builder.as_markup(),
-                    parse_mode="Markdown"
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True
                 )
             else:
                 await callback.message.answer("❌ Қазіргі уақытта тауарлар жоқ." if lang == 'kz' else "❌ В данный момент товаров нет.")
         else:
             error_msg = data.get("error", "Unknown error")
-            await callback.message.answer(f"❌ Қате: {error_msg}" if lang == 'kz' else f"❌ Ошибка: {error_msg}")
+            await callback.message.answer(f"❌ Қате: {error_msg}")
     except Exception as e:
         await callback.message.answer(f"❌ Қате: {str(e)}")
-    
+
+@router.callback_query(F.data.startswith("nc_"))
+async def show_nft_items(callback: CallbackQuery, state: FSMContext, api: APIClient):
+    parts = callback.data.split("_")
+    collection_address = parts[1]
+    cursor = parts[2] if len(parts) > 2 else None
+    await show_nft_items_internal(callback, collection_address, api, state, cursor)
     await callback.answer()
 
 @router.callback_query(F.data == "nft_next")
@@ -538,7 +861,8 @@ async def next_nft_page(callback: CallbackQuery, state: FSMContext, api: APIClie
                 
                 for idx, item in enumerate(current_items):
                     price_kzt = item["price_per_day_rub_with_margin"] * KZT_RATE
-                    items_text += f"🔹 `{item['name']}` — `{price_kzt:.2f} ₸/күн`\n"
+                    link = get_nft_link(item['name'])
+                    items_text += f"🔹 [{item['name']}]({link}) — `{price_kzt:.2f} ₸/күн`\n"
                     builder.button(text=f"🛒 {item['name'][:15]}", callback_data=f"ri_{idx}")
                 
                 if data.get("cursor"):
@@ -551,7 +875,8 @@ async def next_nft_page(callback: CallbackQuery, state: FSMContext, api: APIClie
                     f"📦 **Қолжетімді тауарлар:**\n\n{items_text}\n\nСатып алу үшін таңдаңыз 👇" if lang == 'kz' else
                     f"📦 **Доступные товары:**\n\n{items_text}\n\nВыберите для покупки 👇",
                     reply_markup=builder.as_markup(),
-                    parse_mode="Markdown"
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True
                 )
     except Exception as e:
         print(f"Error in next_nft_page: {e}")

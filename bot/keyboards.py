@@ -38,8 +38,79 @@ def language_kb():
 def admin_kb():
     builder = InlineKeyboardBuilder()
     builder.button(text="📈 Курс/Комиссия", callback_data="admin_settings")
-    builder.button(text="👥 Пайдаланушылар", callback_data="admin_users")
+    builder.button(text="👥 Пайдаланушылар", callback_data="admin_users_0")
     builder.button(text="📊 Статистика", callback_data="admin_stats")
+    builder.button(text="💳 API Теңгерім", callback_data="admin_api_balance")
+    builder.button(text="🎫 Тикеттер", callback_data="admin_tickets")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def admin_users_kb(users: list, offset: int):
+    builder = InlineKeyboardBuilder()
+    for user in users:
+        # user: (user_id, balance, username, ...)
+        username = user[2] or user[0]
+        builder.button(text=f"👤 {username}", callback_data=f"admin_user_{user[0]}")
+    
+    # Пагинация
+    nav_btns = []
+    if offset > 0:
+        nav_btns.append(types.InlineKeyboardButton(text="⬅️", callback_data=f"admin_users_{max(0, offset-10)}"))
+    nav_btns.append(types.InlineKeyboardButton(text="➡️", callback_data=f"admin_users_{offset+10}"))
+    builder.row(*nav_btns)
+    
+    builder.button(text="‹ Артқа", callback_data="admin_panel")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def user_actions_kb(user_id: int, is_blocked: bool):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="💰 Баланс өзгерту", callback_data=f"admin_edit_bal_{user_id}")
+    if is_blocked:
+        builder.button(text="✅ Блоктан шығару", callback_data=f"admin_unban_{user_id}")
+    else:
+        builder.button(text="🚫 Блоктау", callback_data=f"admin_ban_{user_id}")
+    builder.button(text="‹ Тізімге", callback_data="admin_users_0")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def support_kb(lang: str = 'kz'):
+    builder = InlineKeyboardBuilder()
+    if lang == 'kz':
+        builder.button(text="🆕 Жаңа тикет ашу", callback_data="support_new")
+        builder.button(text="📂 Менің тикеттерім", callback_data="support_list")
+        builder.button(text="‹ Мәзірге", callback_data="back_to_main")
+    else:
+        builder.button(text="🆕 Открыть новый тикет", callback_data="support_new")
+        builder.button(text="📂 Мои тикеты", callback_data="support_list")
+        builder.button(text="‹ В меню", callback_data="back_to_main")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def tickets_list_kb(tickets: list, is_admin: bool = False):
+    builder = InlineKeyboardBuilder()
+    for t in tickets:
+        # t: (id, user_id, subject, status, created_at)
+        status_emoji = "🟢" if t[3] == 'open' else "🟡" if t[3] == 'answered' else "🔴"
+        builder.button(text=f"{status_emoji} #{t[0]} - {t[2][:20]}", callback_data=f"ticket_view_{t[0]}")
+    
+    if is_admin:
+        builder.button(text="‹ Админ панель", callback_data="admin_panel")
+    else:
+        builder.button(text="‹ Қолдау", callback_data="support")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def ticket_actions_kb(ticket_id: int, is_admin: bool = False, status: str = 'open'):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="💬 Жауап жазу", callback_data=f"ticket_reply_{ticket_id}")
+    if status != 'closed':
+        builder.button(text="🔒 Жабу", callback_data=f"ticket_close_{ticket_id}")
+    
+    if is_admin:
+        builder.button(text="‹ Тізімге", callback_data="admin_tickets")
+    else:
+        builder.button(text="‹ Тізімге", callback_data="support_list")
     builder.adjust(1)
     return builder.as_markup()
 

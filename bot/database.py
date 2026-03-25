@@ -57,6 +57,26 @@ class Database:
                 )
             """)
 
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS tickets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    subject TEXT,
+                    status TEXT DEFAULT 'open',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS ticket_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ticket_id INTEGER,
+                    sender_id INTEGER,
+                    text TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             # Миграция логикасы: жаңа бағандарды қосу
             cursor = await db.execute("SELECT version FROM migrations")
             row = await cursor.fetchone()
@@ -176,4 +196,71 @@ class Database:
                 "UPDATE users SET balance_kzt = balance_kzt + ?, referral_balance = referral_balance + ? WHERE user_id = ?",
                 (amount, amount, referrer_id)
             )
+            await db.commit()
+
+    async def ban_user(self, user_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE users SET is_blocked = 1 WHERE user_id = ?", (user_id,))
+            await db.commit()
+
+    async def unban_user(self, user_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE users SET is_blocked = 0 WHERE user_id = ?", (user_id,))
+            await db.commit()
+
+    async def set_user_balance(self, user_id: int, balance: float):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE users SET balance_kzt = ? WHERE user_id = ?", (balance, user_id))
+            await db.commit()
+
+    async def get_users_paged(self, limit: int, offset: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute("SELECT * FROM users LIMIT ? OFFSET ?", (limit, offset)) as cursor:
+                return await cursor.fetchall()
+
+    async def create_ticket(self, user_id: int, subject: str):
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "INSERT INTO tickets (user_id, subject) VALUES (?, ?)",
+                (user_id, subject)
+            )
+            ticket_id = cursor.lastrowid
+            await db.commit()
+            return ticket_id
+
+    async def add_ticket_message(self, ticket_id: int, sender_id: int, text: str):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "INSERT INTO ticket_messages (ticket_id, sender_id, text) VALUES (?, ?, ?)",
+                (ticket_id, sender_id, text)
+            )
+            await db.commit()
+
+    async def get_user_tickets(self, user_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute("SELECT * FROM tickets WHERE user_id = ? ORDER BY created_at DESC", (user_id,)) as cursor:
+                return await cursor.fetchall()
+
+    async def get_all_tickets(self, status: str = None):
+        async with aiosqlite.connect(self.db_path) as db:
+            if status:
+                async with db.execute("SELECT * FROM tickets WHERE status = ? ORDER BY created_at DESC", (status,)) as cursor:
+                    return await cursor.fetchall()
+            else:
+                async with db.execute("SELECT * FROM tickets ORDER BY created_at DESC") as cursor:
+                    return await cursor.fetchall()
+
+    async def get_ticket(self, ticket_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)) as cursor:
+                return await cursor.fetchone()
+
+    async def get_ticket_messages(self, ticket_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute("SELECT * FROM ticket_messages WHERE ticket_id = ? ORDER BY created_at ASC", (ticket_id,)) as cursor:
+                return await cursor.fetchall()
+
+    async def update_ticket_status(self, ticket_id: int, status: str):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE tickets SET status = ? WHERE id = ?", (status, ticket_id))
             await db.commit()
