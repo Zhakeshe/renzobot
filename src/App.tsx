@@ -1,25 +1,3 @@
-import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { 
-  Star, 
-  ShieldCheck, 
-  LayoutGrid, 
-  User, 
-  Wallet, 
-  ArrowRight,
-  ChevronRight,
-  History,
-  Info
-} from 'lucide-react';
-import { cn } from './lib/utils';
-
-// Mock data for preview
-const PRODUCTS = [
-  { id: 'stars', name: 'Telegram Stars', icon: Star, color: 'text-yellow-400', price: '1.85 ₽', priceKzt: '9.62 ₸' },
-  { id: 'premium', name: 'Premium', icon: ShieldCheck, color: 'text-blue-400', price: '320 ₽', priceKzt: '1664 ₸' },
-  { id: 'nft', name: 'NFT жалдау', icon: LayoutGrid, color: 'text-orange-400', price: '12.5 ₽/күн', priceKzt: '65 ₸/күн' },
-];
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -28,7 +6,7 @@ import {
   LayoutGrid, 
   User, 
   Wallet, 
-  ArrowRight,
+  ArrowRight, 
   ChevronRight,
   History,
   Info,
@@ -42,7 +20,7 @@ import { cn } from './lib/utils';
 
 // --- Components ---
 
-const Card = ({ children, className }: { children: React.ReactNode, className?: string }) => (
+const Card = ({ children, className }: { children: React.ReactNode, className?: string, key?: any }) => (
   <div className={cn("bg-slate-800/40 border border-slate-700/50 rounded-2xl p-4", className)}>
     {children}
   </div>
