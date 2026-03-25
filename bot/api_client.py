@@ -182,6 +182,24 @@ class APIClient:
                 )
                 return response.json()
 
+    async def get_stars_items(self) -> Dict[str, Any]:
+        async with self.limiter:
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        f"{self.base_url}/api/v1/client/stars/items",
+                        headers=self.headers,
+                        timeout=10
+                    )
+                    data = response.json()
+                    if data.get("success") and "items" in data:
+                        for item in data["items"]:
+                            if "price_rub" in item:
+                                item["price_rub_with_margin"] = self._apply_margin(item["price_rub"])
+                    return data
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+
     async def get_nft_items(self, nft_type: str) -> Dict[str, Any]:
         """
         nft_type: 'gifts', 'usernames', 'numbers'

@@ -45,9 +45,12 @@ def admin_kb():
 
 def stars_items_kb(items: list, lang: str = 'kz'):
     builder = InlineKeyboardBuilder()
-    for item in items:
+    # Тек алғашқы 5 тауарды көрсетеміз
+    for item in items[:5]:
         # item: {id, name, price_rub_with_margin}
-        builder.button(text=f"{item['name']}", callback_data=f"buy_stars_item_{item['id']}")
+        cb_data = f"buy_stars_item_{item['id']}"
+        if len(cb_data.encode('utf-8')) <= 64:
+            builder.button(text=f"{item['name']}", callback_data=cb_data)
     
     if lang == 'kz':
         builder.button(text="‹ Мәзірге", callback_data="back_to_main")
