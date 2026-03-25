@@ -33,7 +33,10 @@ import {
   History,
   Info,
   Loader2,
-  AlertCircle
+  AlertCircle,
+  BarChart3,
+  Users,
+  ShoppingCart
 } from 'lucide-react';
 import { cn } from './lib/utils';
 
@@ -73,6 +76,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('shop');
   const [userData, setUserData] = useState<any>(null);
   const [products, setProducts] = useState<any[]>([]);
+  const [adminStats, setAdminStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -95,6 +99,17 @@ export default function App() {
 
       setUserData(userData);
       setProducts(productsData);
+
+      // Егер админ болса, статистиканы жүктеу
+      if (userData.is_admin) {
+        const statsRes = await fetch('/api/admin/stats', {
+          headers: { 'x-user-id': userId.toString() }
+        });
+        if (statsRes.ok) {
+          setAdminStats(await statsRes.json());
+        }
+      }
+
       setError(null);
     } catch (err: any) {
       setError(err.message);
@@ -221,7 +236,7 @@ export default function App() {
                 </Button>
               </Card>
             </motion.div>
-          ) : (
+          ) : activeTab === 'profile' ? (
             <motion.div
               key="profile"
               initial={{ opacity: 0, y: 10 }}
@@ -272,13 +287,73 @@ export default function App() {
                 </div>
               </section>
             </motion.div>
-          )}
+          ) : activeTab === 'admin' && userData?.is_admin ? (
+            <motion.div
+              key="admin"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="space-y-6"
+            >
+              <h2 className="text-xl font-bold text-white mb-4">Басқару панелі</h2>
+              
+              <div className="grid grid-cols-2 gap-3">
+                <Card className="bg-blue-600/10 border-blue-500/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Users className="w-4 h-4 text-blue-400" />
+                    <span className="text-xs font-bold text-slate-400 uppercase">Адамдар</span>
+                  </div>
+                  <p className="text-2xl font-mono font-bold text-white">{adminStats?.usersCount || 0}</p>
+                </Card>
+                <Card className="bg-purple-600/10 border-purple-500/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <ShoppingCart className="w-4 h-4 text-purple-400" />
+                    <span className="text-xs font-bold text-slate-400 uppercase">Тапсырыс</span>
+                  </div>
+                  <p className="text-2xl font-mono font-bold text-white">{adminStats?.ordersCount || 0}</p>
+                </Card>
+                <Card className="bg-green-600/10 border-green-500/20 col-span-2 flex justify-between items-center">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <BarChart3 className="w-4 h-4 text-green-400" />
+                      <span className="text-xs font-bold text-slate-400 uppercase">Жалпы сауда / Пайда</span>
+                    </div>
+                    <div className="flex items-baseline gap-2">
+                      <p className="text-2xl font-mono font-bold text-white">{adminStats?.salesSum?.toLocaleString() || 0} ₸</p>
+                      <span className="text-sm text-green-400 font-mono">+{adminStats?.profitSum?.toLocaleString() || 0} ₸</span>
+                    </div>
+                  </div>
+                </Card>
+              </div>
+
+              <section>
+                <h3 className="text-xs font-semibold uppercase tracking-widest text-slate-500 mb-3 px-2">Соңғы тапсырыстар</h3>
+                <div className="space-y-2">
+                  {adminStats?.recentOrders?.map((order: any) => (
+                    <Card key={order.id} className="flex justify-between items-center py-2">
+                      <div>
+                        <p className="font-semibold text-sm text-slate-200">{order.product_type}</p>
+                        <p className="text-[10px] text-slate-500">ID: {order.user_id}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-mono text-sm text-blue-400">{order.amount_kzt} ₸</p>
+                        <p className={cn("text-[10px] uppercase font-bold", 
+                          order.status === 'completed' ? "text-green-400" : "text-yellow-400")}>
+                          {order.status}
+                        </p>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              </section>
+            </motion.div>
+          ) : null}
         </AnimatePresence>
       </main>
 
       {/* Navigation */}
       <nav className="fixed bottom-6 left-4 right-4 z-50">
-        <div className="max-w-xs mx-auto bg-slate-900/90 backdrop-blur-xl border border-slate-800 p-2 rounded-2xl flex gap-2 shadow-2xl shadow-black/50">
+        <div className="max-w-md mx-auto bg-slate-900/90 backdrop-blur-xl border border-slate-800 p-2 rounded-2xl flex gap-2 shadow-2xl shadow-black/50">
           <button
             onClick={() => setActiveTab('shop')}
             className={cn(
@@ -299,6 +374,18 @@ export default function App() {
             <User className="w-5 h-5" />
             <span className="text-sm font-bold">Профиль</span>
           </button>
+          {userData?.is_admin && (
+            <button
+              onClick={() => setActiveTab('admin')}
+              className={cn(
+                "flex-1 flex items-center justify-center gap-2 py-3 rounded-xl transition-all duration-300",
+                activeTab === 'admin' ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20" : "text-slate-500 hover:text-slate-300"
+              )}
+            >
+              <BarChart3 className="w-5 h-5" />
+              <span className="text-sm font-bold">Админ</span>
+            </button>
+          )}
         </div>
       </nav>
     </div>

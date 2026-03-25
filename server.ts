@@ -49,6 +49,8 @@ async function startServer() {
   };
 
   // API: Пайдаланушы деректері
+  const ADMIN_ID = parseInt(process.env.ADMIN_ID || "7874477752");
+
   app.get("/api/user/:id", async (req, res) => {
     const user = await db.get("SELECT * FROM users WHERE user_id = ?", [req.params.id]);
     const orders = await db.all("SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC LIMIT 10", [req.params.id]);
@@ -57,7 +59,31 @@ async function startServer() {
     
     res.json({
       ...user,
-      orders
+      orders,
+      is_admin: parseInt(req.params.id) === ADMIN_ID
+    });
+  });
+
+  // API: Админ статистикасы
+  app.get("/api/admin/stats", async (req, res) => {
+    const userId = parseInt(req.headers['x-user-id'] as string || "0");
+    if (userId !== ADMIN_ID) return res.status(403).json({ error: "Forbidden" });
+
+    const totalUsers = await db.get("SELECT COUNT(*) as count FROM users");
+    const totalOrders = await db.get("SELECT COUNT(*) as count FROM orders");
+    const totalSales = await db.get("SELECT SUM(amount_kzt) as sum FROM orders WHERE status = 'completed'");
+    const totalProfit = await db.get("SELECT SUM(profit_kzt) as sum FROM orders WHERE status = 'completed'");
+
+    const recentUsers = await db.all("SELECT user_id, username, balance_kzt, created_at FROM users ORDER BY created_at DESC LIMIT 5");
+    const recentOrders = await db.all("SELECT id, user_id, product_type, amount_kzt, status, created_at FROM orders ORDER BY created_at DESC LIMIT 5");
+
+    res.json({
+      usersCount: totalUsers.count || 0,
+      ordersCount: totalOrders.count || 0,
+      salesSum: totalSales.sum || 0,
+      profitSum: totalProfit.sum || 0,
+      recentUsers,
+      recentOrders
     });
   });
 
