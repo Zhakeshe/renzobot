@@ -60,7 +60,11 @@ TEXTS = {
         'lang_changed': "🌍 Тіл қазақшаға өзгертілді!",
         'broadcast_prompt': "📣 Барлық пайдаланушыларға жіберілетін хабарламаны жазыңыз:",
         'nft_rental_menu': "🖼 **NFT Жалдау**\n\n🎁 **NFT-подарки**\n└ Telegram-ның бірегей сыйлықтарын тәулігіне теңгемен жалға алыңыз.\n\n👤 **NFT-юзернеймдер**\n└ Ең қысқадан ең сирекке дейінгі әдемі және танымал есімдер.\n\n☎️ **NFT-номерлер**\n└ Жалға алуға арналған бірегей Telegram +888 цифрлық нөмірлері — сирек, қымбат.\n\nЖалға алғыңыз келетін нәрсені таңдаңыз 👇",
-        'nft_list': "📦 **Қолжетімді тауарлар ({type}):**\n\n{items}\n\nСатып алу үшін тауардың ID-ін жазыңыз немесе таңдаңыз:"
+        'nft_list': "📦 **Қолжетімді тауарлар ({type}):**\n\n{items}\n\nСатып алу үшін таңдаңыз 👇",
+        'nft_rent_days': "💎 **{name}**\n\n💰 Жалдау бағасы: `{price:.2f} ₸/күн`\n📦 Ең аз мерзім: `{min_days}` күн\n\nНеше күнге жалдағыңыз келеді? (санын жазыңыз):",
+        'nft_rent_success': "✅ **Жалдау сәтті орындалды!**\n\n📦 Тауар: `{name}`\n📅 Мерзімі: `{days} күн`\n💰 Барлығы: `{total:.2f} ₸`\n\nЕнді Fragment-те қолдану үшін TON Connect арқылы қосылуыңыз керек.",
+        'nft_connect_prompt': "🔗 Fragment-тен TON Connect сілтемесін (URL) жіберіңіз:",
+        'nft_connect_success': "✅ TON Connect сәтті қосылды! Енді Fragment-те қолдана аласыз."
     },
     'ru': {
         'start': "Привет, {name}! 👋\nДобро пожаловать в магазин цифровых товаров.",
@@ -74,7 +78,11 @@ TEXTS = {
         'lang_changed': "🌍 Язык изменен на русский!",
         'broadcast_prompt': "📣 Введите сообщение для рассылки всем пользователям:",
         'nft_rental_menu': "🖼 **Аренда NFT**\n\n🎁 **NFT-подарки**\n└ Уникальные подарки Telegram в аренду за рубли, посуточно.\n\n👤 **NFT-юзернеймы**\n└ Красивые и узнаваемые имена от самых коротких до самых редких.\n\n☎️ **NFT-номера**\n└ Уникальные цифровые номера Telegram +888 для аренды — редкие, дорогие.\n\nВыберите, что хотите арендовать 👇",
-        'nft_list': "📦 **Доступные товары ({type}):**\n\n{items}\n\nДля покупки введите ID товара или выберите:"
+        'nft_list': "📦 **Доступные товары ({type}):**\n\n{items}\n\nВыберите для покупки 👇",
+        'nft_rent_days': "💎 **{name}**\n\n💰 Цена аренды: `{price:.2f} ₸/день`\n📦 Мин. срок: `{min_days}` дн.\n\nНа сколько дней хотите арендовать? (введите число):",
+        'nft_rent_success': "✅ **Аренда успешно оформлена!**\n\n📦 Товар: `{name}`\n📅 Срок: `{days} дн.`\n💰 Итого: `{total:.2f} ₸`\n\nТеперь вам нужно подключиться через TON Connect для использования на Fragment.",
+        'nft_connect_prompt': "🔗 Пришлите TON Connect ссылку (URL) из Fragment:",
+        'nft_connect_success': "✅ TON Connect успешно подключен! Теперь вы можете использовать его на Fragment."
     }
 }
 
@@ -904,13 +912,22 @@ async def start_nft_rent(callback: CallbackQuery, state: FSMContext, api: APICli
         return
         
     price_kzt = rate_res["price_per_day_rub_with_margin"] * KZT_RATE
-    await state.update_data(nft_address=nft_address, price_per_day=price_kzt, name=rate_res.get("nft_name", "NFT"))
+    nft_name = rate_res.get("nft_name", item.get("name", "NFT"))
+    min_days = rate_res.get('min_days', 1)
     
-    await callback.message.answer(
-        f"💎 **{rate_res.get('nft_name', 'NFT')}**\n\n"
-        f"💰 Жалдау бағасы: `{price_kzt:.2f} ₸/күн`\n"
-        f"📦 Ең аз мерзім: {rate_res.get('min_days', 1)} күн\n\n"
-        "Неше күнге жалдағыңыз келеді? (санын жазыңыз):",
+    await state.update_data(nft_address=nft_address, price_per_day=price_kzt, name=nft_name)
+    
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    builder = InlineKeyboardBuilder()
+    builder.button(text="‹ Артқа / Назад", callback_data="rent_nft")
+    
+    await callback.message.edit_text(
+        TEXTS[lang]['nft_rent_days'].format(
+            name=nft_name,
+            price=price_kzt,
+            min_days=min_days
+        ),
+        reply_markup=builder.as_markup(),
         parse_mode="Markdown"
     )
     await state.set_state(NFTState.waiting_for_days)
@@ -918,19 +935,23 @@ async def start_nft_rent(callback: CallbackQuery, state: FSMContext, api: APICli
 
 @router.message(NFTState.waiting_for_days)
 async def process_nft_days(message: Message, state: FSMContext, api: APIClient):
+    user = await db.get_user(message.from_user.id)
+    lang = user[4] if user else 'kz'
+    
     if not message.text.isdigit():
-        await message.answer("❌ Тек сандарды енгізіңіз.")
+        await message.answer("❌ Тек сандарды енгізіңіз." if lang == 'kz' else "❌ Введите только числа.")
         return
         
     days = int(message.text)
     data = await state.get_data()
-    user = await db.get_user(message.from_user.id)
-    lang = user[4] if user else 'kz'
     
     total_price = data['price_per_day'] * days
     
     if user[1] < total_price:
-        await message.answer(f"❌ Қаражат жеткіліксіз! Қажет: {total_price:.2f} ₸")
+        await message.answer(
+            f"❌ Қаражат жеткіліксіз! Қажет: {total_price:.2f} ₸" if lang == 'kz' else
+            f"❌ Недостаточно средств! Нужно: {total_price:.2f} ₸"
+        )
         await state.clear()
         return
         
@@ -940,56 +961,67 @@ async def process_nft_days(message: Message, state: FSMContext, api: APIClient):
     if rent_res.get("success"):
         await db.update_balance(message.from_user.id, -total_price)
         
+        # Get transaction_id or order_id from response
+        transaction_id = rent_res.get("transaction_id") or rent_res.get("order_id") or rent_res.get("id")
+        
         from aiogram.utils.keyboard import InlineKeyboardBuilder
         builder = InlineKeyboardBuilder()
-        builder.button(text="🔗 TON Connect қосу / Подключить", callback_data=f"cn_{data['nft_address']}")
+        if transaction_id:
+            builder.button(text="🔗 TON Connect қосу / Подключить", callback_data=f"cn_{transaction_id}")
         
         await message.answer(
-            f"✅ **Жалдау сәтті орындалды!**\n\n"
-            f"📦 Тауар: `{data['name']}`\n"
-            f"📅 Мерзімі: `{days} күн`\n"
-            f"💰 Барлығы: `{total_price:.2f} ₸`\n\n"
-            "Енді Fragment-те қолдану үшін TON Connect арқылы қосылуыңыз керек.",
+            TEXTS[lang]['nft_rent_success'].format(
+                name=data['name'],
+                days=days,
+                total=total_price
+            ),
             reply_markup=builder.as_markup(),
             parse_mode="Markdown"
         )
     else:
         error = rent_res.get("error", "Unknown error")
-        await message.answer(f"❌ Қате: {error}")
+        await message.answer(f"❌ Қате: {error}" if lang == 'kz' else f"❌ Ошибка: {error}")
         
     await state.clear()
 
 @router.callback_query(F.data.startswith("cn_"))
 async def start_connect_nft(callback: CallbackQuery, state: FSMContext):
-    nft_address = callback.data.split("_")[1]
+    transaction_id = callback.data.split("_")[1]
     user = await db.get_user(callback.from_user.id)
     lang = user[4] if user else 'kz'
     
-    await state.update_data(nft_address=nft_address)
-    await callback.message.answer(
-        "🔗 Fragment-тен TON Connect сілтемесін (URL) жіберіңіз:" if lang == 'kz' else
-        "🔗 Пришлите TON Connect ссылку (URL) из Fragment:"
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    builder = InlineKeyboardBuilder()
+    builder.button(text="❌ Бас тарту / Отмена", callback_data="back_to_main")
+    
+    await state.update_data(transaction_id=transaction_id)
+    await callback.message.edit_text(
+        TEXTS[lang]['nft_connect_prompt'],
+        reply_markup=builder.as_markup(),
+        parse_mode="Markdown"
     )
     await state.set_state(NFTState.waiting_for_ton_connect)
     await callback.answer()
 
 @router.message(NFTState.waiting_for_ton_connect)
 async def process_ton_connect(message: Message, state: FSMContext, api: APIClient):
-    url = message.text.strip()
-    if not url.startswith("tc://") and not url.startswith("https://"):
-        await message.answer("❌ Қате сілтеме. Қайтадан жіберіңіз.")
-        return
-        
-    data = await state.get_data()
     user = await db.get_user(message.from_user.id)
     lang = user[4] if user else 'kz'
     
-    res = await api.connect_nft_rent(data['nft_address'], url)
+    url = message.text.strip()
+    if not url.startswith("tc://") and not url.startswith("https://"):
+        await message.answer("❌ Қате сілтеме. Қайтадан жіберіңіз." if lang == 'kz' else "❌ Неверная ссылка. Отправьте еще раз.")
+        return
+        
+    data = await state.get_data()
+    
+    # Use transaction_id instead of nft_address
+    res = await api.connect_nft_rent(data['transaction_id'], url)
     
     if res.get("success"):
-        await message.answer("✅ TON Connect сәтті қосылды! Енді Fragment-те қолдана аласыз." if lang == 'kz' else "✅ TON Connect успешно подключен! Теперь вы можете использовать его на Fragment.")
+        await message.answer(TEXTS[lang]['nft_connect_success'])
     else:
         error = res.get("error", "Unknown error")
-        await message.answer(f"❌ Қате: {error}")
+        await message.answer(f"❌ Қате: {error}" if lang == 'kz' else f"❌ Ошибка: {error}")
         
     await state.clear()
