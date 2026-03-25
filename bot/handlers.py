@@ -751,6 +751,7 @@ async def back_to_main(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("nft_cat_"))
 async def show_nft_category(callback: CallbackQuery, api: APIClient, state: FSMContext):
     category = callback.data.split("_")[2]
+    await state.update_data(category=category)
     user = await db.get_user(callback.from_user.id)
     lang = user[4] if user else 'kz'
     
@@ -914,46 +915,62 @@ async def next_nft_page(callback: CallbackQuery, state: FSMContext, api: APIClie
 
 @router.callback_query(F.data.startswith("ri_"))
 async def start_nft_rent(callback: CallbackQuery, state: FSMContext, api: APIClient):
-    idx = int(callback.data.split("_")[1])
-    state_data = await state.get_data()
-    items = state_data.get("current_items", [])
-    
-    user = await db.get_user(callback.from_user.id)
-    lang = user[4] if user else 'kz'
-    
-    if idx >= len(items):
-        await callback.answer("❌ Тауар табылмады." if lang == 'kz' else "❌ Товар не найден.")
-        return
+    try:
+        idx = int(callback.data.split("_")[1])
+        state_data = await state.get_data()
+        items = state_data.get("current_items", [])
         
-    item = items[idx]
-    nft_address = item["address"]
-    
-    rate_res = await api.get_nft_rate(nft_address)
-    if not rate_res.get("success"):
-        await callback.message.answer("❌ Тауар туралы ақпарат алу мүмкін болмады." if lang == 'kz' else "❌ Не удалось получить информацию о товаре.")
-        return
+        user = await db.get_user(callback.from_user.id)
+        lang = user[4] if user else 'kz'
         
-    price_kzt = rate_res["price_per_day_rub_with_margin"] * KZT_RATE
-    nft_name = rate_res.get("nft_name", item.get("name", "NFT"))
-    min_days = rate_res.get('min_days', 1)
-    
-    await state.update_data(nft_address=nft_address, price_per_day=price_kzt, name=nft_name)
-    
-    from aiogram.utils.keyboard import InlineKeyboardBuilder
-    builder = InlineKeyboardBuilder()
-    builder.button(text="‹ Артқа / Назад", callback_data="rent_nft")
-    
-    await callback.message.edit_text(
-        TEXTS[lang]['nft_rent_days'].format(
-            name=nft_name,
-            price=price_kzt,
-            min_days=min_days
-        ),
-        reply_markup=builder.as_markup(),
-        parse_mode="Markdown"
-    )
-    await state.set_state(NFTState.waiting_for_days)
-    await callback.answer()
+        if idx >= len(items):
+            await callback.answer("❌ Тауар табылмады." if lang == 'kz' else "❌ Товар не найден.")
+            return
+            
+        item = items[idx]
+        nft_address = item["address"]
+        
+        # Use data from item to avoid rate limit on get_nft_rate
+        price_kzt = item.get("price_per_day_rub_with_margin", 0) * KZT_RATE
+        nft_name = item.get("name", "NFT")
+        min_days = item.get('min_days', 1)
+        
+        # If price is 0, try to get it from API once, but catch errors
+        if price_kzt == 0:
+            try:
+                rate_res = await api.get_nft_rate(nft_address)
+                if rate_res.get("success"):
+                    price_kzt = rate_res["price_per_day_rub_with_margin"] * KZT_RATE
+                    nft_name = rate_res.get("nft_name", nft_name)
+                    min_days = rate_res.get('min_days', min_days)
+            except Exception as e:
+                print(f"Error fetching rate: {e}")
+        
+        if price_kzt == 0:
+            await callback.answer("❌ Тауар бағасын алу мүмкін болмады." if lang == 'kz' else "❌ Не удалось получить цену товара.")
+            return
+
+        await state.update_data(nft_address=nft_address, price_per_day=price_kzt, name=nft_name, min_days=min_days)
+        
+        from aiogram.utils.keyboard import InlineKeyboardBuilder
+        builder = InlineKeyboardBuilder()
+        builder.button(text="‹ Артқа / Назад", callback_data="rent_nft")
+        
+        await callback.message.edit_text(
+            TEXTS[lang]['nft_rent_days'].format(
+                name=nft_name,
+                price=price_kzt,
+                min_days=min_days
+            ),
+            reply_markup=builder.as_markup(),
+            parse_mode="Markdown"
+        )
+        await state.set_state(NFTState.waiting_for_days)
+        await callback.answer()
+    except Exception as e:
+        print(f"Error in start_nft_rent: {e}")
+        await callback.message.answer(f"❌ Қате: {str(e)}")
+        await callback.answer()
 
 @router.message(NFTState.waiting_for_days)
 async def process_nft_days(message: Message, state: FSMContext, api: APIClient):
@@ -966,7 +983,15 @@ async def process_nft_days(message: Message, state: FSMContext, api: APIClient):
         
     days = int(message.text)
     data = await state.get_data()
+    min_days = data.get('min_days', 1)
     
+    if days < min_days:
+        await message.answer(
+            f"❌ Ең аз жалдау мерзімі: {min_days} күн." if lang == 'kz' else
+            f"❌ Минимальный срок аренды: {min_days} дн."
+        )
+        return
+        
     total_price = data['price_per_day'] * days
     
     if user[1] < total_price:
