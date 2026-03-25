@@ -772,9 +772,12 @@ async def show_nft_category(callback: CallbackQuery, api: APIClient, state: FSMC
             
             for col in gift_collections[:10]: # Limit to 10
                 col_name = col['name']
+                col_address = col.get('address') or col.get('nft_address')
+                if not col_address:
+                    continue
                 if len(col_name) > 15:
                     col_name = col_name[:12] + "..."
-                builder.button(text=f"🖼 {col_name}", callback_data=f"nc_{col['address']}")
+                builder.button(text=f"🖼 {col_name}", callback_data=f"nc_{col_address}")
             
             builder.button(text="‹ Артқа / Назад", callback_data="rent_nft")
             builder.adjust(1)
@@ -787,13 +790,21 @@ async def show_nft_category(callback: CallbackQuery, api: APIClient, state: FSMC
         elif category == "usernames":
             col = next((c for c in collections if "username" in c['name'].lower()), None)
             if col:
-                await show_nft_items_internal(callback, col['address'], api, state)
+                col_address = col.get('address') or col.get('nft_address')
+                if col_address:
+                    await show_nft_items_internal(callback, col_address, api, state)
+                else:
+                    await callback.answer("❌ Коллекция адресі табылмады." if lang == 'kz' else "❌ Адрес коллекции не найден.")
             else:
                 await callback.answer("❌ Табылмады." if lang == 'kz' else "❌ Не найдено.")
         elif category == "numbers":
             col = next((c for c in collections if "number" in c['name'].lower()), None)
             if col:
-                await show_nft_items_internal(callback, col['address'], api, state)
+                col_address = col.get('address') or col.get('nft_address')
+                if col_address:
+                    await show_nft_items_internal(callback, col_address, api, state)
+                else:
+                    await callback.answer("❌ Коллекция адресі табылмады." if lang == 'kz' else "❌ Адрес коллекции не найден.")
             else:
                 await callback.answer("❌ Табылмады." if lang == 'kz' else "❌ Не найдено.")
                 
@@ -827,7 +838,8 @@ async def show_nft_items_internal(callback: CallbackQuery, collection_address: s
                 for idx, item in enumerate(current_items):
                     price_kzt = item["price_per_day_rub_with_margin"] * KZT_RATE
                     link = get_nft_link(item['name'])
-                    items_text += f"🔹 [{item['name']}]({link}) — `{price_kzt:.2f} ₸/күн`\n"
+                    day_text = "күн" if lang == 'kz' else "день"
+                    items_text += f"🔹 [{item['name']}]({link}) — `{price_kzt:.2f} ₸/{day_text}`\n"
                     builder.button(text=f"🛒 {item['name'][:15]}", callback_data=f"ri_{idx}")
                 
                 next_cursor = data.get("cursor")
@@ -893,7 +905,8 @@ async def next_nft_page(callback: CallbackQuery, state: FSMContext, api: APIClie
                 for idx, item in enumerate(current_items):
                     price_kzt = item["price_per_day_rub_with_margin"] * KZT_RATE
                     link = get_nft_link(item['name'])
-                    items_text += f"🔹 [{item['name']}]({link}) — `{price_kzt:.2f} ₸/күн`\n"
+                    day_text = "күн" if lang == 'kz' else "день"
+                    items_text += f"🔹 [{item['name']}]({link}) — `{price_kzt:.2f} ₸/{day_text}`\n"
                     builder.button(text=f"🛒 {item['name'][:15]}", callback_data=f"ri_{idx}")
                 
                 if data.get("cursor"):
@@ -928,7 +941,11 @@ async def start_nft_rent(callback: CallbackQuery, state: FSMContext, api: APICli
             return
             
         item = items[idx]
-        nft_address = item["address"]
+        nft_address = item.get("address") or item.get("nft_address")
+        
+        if not nft_address:
+            await callback.answer("❌ Тауар адресі табылмады." if lang == 'kz' else "❌ Адрес товара не найден.")
+            return
         
         # Use data from item to avoid rate limit on get_nft_rate
         price_kzt = item.get("price_per_day_rub_with_margin", 0) * KZT_RATE
