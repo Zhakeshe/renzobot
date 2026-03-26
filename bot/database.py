@@ -240,9 +240,19 @@ class Database:
             async with db.execute("SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC", (user_id,)) as cursor:
                 return await cursor.fetchall()
 
+    async def get_user_payments(self, user_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute("SELECT * FROM payment_requests WHERE user_id = ? ORDER BY created_at DESC", (user_id,)) as cursor:
+                return await cursor.fetchall()
+
     async def get_order(self, order_id: int):
         async with aiosqlite.connect(self.db_path) as db:
             async with db.execute("SELECT * FROM orders WHERE id = ?", (order_id,)) as cursor:
+                return await cursor.fetchone()
+
+    async def get_payment_request(self, req_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute("SELECT * FROM payment_requests WHERE id = ?", (req_id,)) as cursor:
                 return await cursor.fetchone()
 
     async def get_profit_stats(self):

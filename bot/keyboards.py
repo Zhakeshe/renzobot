@@ -205,10 +205,23 @@ def stars_items_kb(items: list, lang: str = 'kz'):
 
 def profile_kb():
     builder = InlineKeyboardBuilder()
-    builder.button(text="💰 Толтыру (₸)", callback_data="topup")
-    builder.button(text="📜 Тапсырыстар тарихы", callback_data="history")
+    builder.button(text="💰 Толтыру / Пополнить (₸)", callback_data="topup")
+    builder.button(text="📜 Тарих / История", callback_data="history")
     builder.button(text="🌍 Тілді өзгерту / Сменить язык", callback_data="change_lang")
     builder.button(text="‹ Артқа / Назад", callback_data="back_to_main")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def history_menu_kb(lang: str = 'kz'):
+    builder = InlineKeyboardBuilder()
+    if lang == 'kz':
+        builder.button(text="🛍 Сатып алулар тарихы", callback_data="history_orders")
+        builder.button(text="💳 Толтырулар тарихы", callback_data="history_payments")
+        builder.button(text="‹ Профильге қайту", callback_data="profile")
+    else:
+        builder.button(text="🛍 История покупок", callback_data="history_orders")
+        builder.button(text="💳 История пополнений", callback_data="history_payments")
+        builder.button(text="‹ Назад к профилю", callback_data="profile")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -219,8 +232,27 @@ def history_kb(orders: list, lang: str = 'kz'):
         status_emoji = "✅" if order[3] == 'completed' else "⏳" if order[3] in ['pending', 'processing'] else "❌"
         builder.button(text=f"🔹 {order[5]} | {order[7]:.1f}₸ {status_emoji}", callback_data=f"order_view_{order[0]}")
     
-    back_text = "‹ Профильге қайту" if lang == 'kz' else "‹ Назад к профилю"
-    builder.button(text=back_text, callback_data="profile")
+    back_text = "‹ Тарих мәзіріне қайту" if lang == 'kz' else "‹ Назад в меню истории"
+    builder.button(text=back_text, callback_data="history")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def payments_history_kb(payments: list, lang: str = 'kz'):
+    builder = InlineKeyboardBuilder()
+    for pay in payments:
+        # pay: (id, user_id, amount, method, receipt_file_id, comment_code, status, created_at)
+        status_emoji = "✅" if pay[6] == 'approved' else "⏳" if pay[6] == 'pending' else "❌"
+        builder.button(text=f"💰 {pay[2]:.0f}₸ | {pay[3]} {status_emoji}", callback_data=f"pay_view_{pay[0]}")
+    
+    back_text = "‹ Тарих мәзіріне қайту" if lang == 'kz' else "‹ Назад в меню истории"
+    builder.button(text=back_text, callback_data="history")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def payment_details_kb(lang: str = 'kz'):
+    builder = InlineKeyboardBuilder()
+    back_text = "‹ Тізімге қайту" if lang == 'kz' else "‹ Назад к списку"
+    builder.button(text=back_text, callback_data="history_payments")
     builder.adjust(1)
     return builder.as_markup()
 

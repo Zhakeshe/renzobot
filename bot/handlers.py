@@ -1,7 +1,7 @@
 from aiogram import Router, F
 import random
 from aiogram.filters import CommandStart, CommandObject
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, LabeledPrice, PreCheckoutQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from database import Database
@@ -82,6 +82,9 @@ TEXTS = {
         'nft_connect_prompt': "🔗 Fragment-тен TON Connect сілтемесін (URL) жіберіңіз:",
         'nft_connect_success': "✅ TON Connect сәтті қосылды! Енді Fragment-те қолдана аласыз.",
         'history_title': "📜 **Тапсырыстар тарихы:**",
+        'history_menu': "📜 **Тарих мәзірі:**\n\nТөмендегі бөлімдердің бірін таңдаңыз:",
+        'payments_history_title': "💳 **Толтырулар тарихы:**",
+        'payment_details': "💰 **Толтыру мәліметтері:**\n\n🆔 ID: `{id}`\n💵 Сома: `{amount} ₸`\n🔌 Әдіс: `{method}`\n📝 Код: `{code}`\n📊 Күйі: {status}\n📅 Күні: `{date}`",
         'order_details': "📦 **Тапсырыс мәліметтері #{id}.**\n\n📝 Өнім: `{name}`;\n💰 Бағасы: `{price:.2f} ₸`;\n📊 Статус: {status};\n📅 Күні: `{date}`;\n\n📄 Сипаттама: `{description}`.\n🔗 Fragment: {fragment_status}"
     },
     'ru': {
@@ -102,6 +105,9 @@ TEXTS = {
         'nft_connect_prompt': "🔗 Пришлите TON Connect ссылку (URL) из Fragment:",
         'nft_connect_success': "✅ TON Connect успешно подключен! Теперь вы можете использовать его на Fragment.",
         'history_title': "📜 **История покупок:**",
+        'history_menu': "📜 **Меню истории:**\n\nВыберите один из разделов ниже:",
+        'payments_history_title': "💳 **История пополнений:**",
+        'payment_details': "💰 **Детали пополнения:**\n\n🆔 ID: `{id}`\n💵 Сумма: `{amount} ₸`\n🔌 Метод: `{method}`\n📝 Код: `{code}`\n📊 Статус: {status}\n📅 Дата: `{date}`",
         'order_details': "📦 **Детали заказа #{id}.**\n\n📝 Продукт: `{name}`;\n💰 Цена: `{price:.2f} ₸`;\n📊 Статус: {status};\n📅 Дата: `{date}`;\n\n📄 Описание: Аренда `{name}` на `{days}` дней.\n🔗 Fragment: {fragment_status}"
     }
 }
@@ -1627,12 +1633,65 @@ async def process_ton_connect(message: Message, state: FSMContext, api: APIClien
 async def show_history(callback: CallbackQuery):
     user = await db.get_user(callback.from_user.id)
     lang = user[4] if user else 'kz'
+    from keyboards import history_menu_kb
+    await callback.message.edit_text(
+        TEXTS[lang]['history_menu'],
+        reply_markup=history_menu_kb(lang),
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "history_orders")
+async def show_orders_history(callback: CallbackQuery):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
     orders = await db.get_user_orders(callback.from_user.id)
-    
     from keyboards import history_kb
     await callback.message.edit_text(
         TEXTS[lang]['history_title'],
         reply_markup=history_kb(orders, lang),
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "history_payments")
+async def show_payments_history(callback: CallbackQuery):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    payments = await db.get_user_payments(callback.from_user.id)
+    from keyboards import payments_history_kb
+    await callback.message.edit_text(
+        TEXTS[lang]['payments_history_title'],
+        reply_markup=payments_history_kb(payments, lang),
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("pay_view_"))
+async def view_payment(callback: CallbackQuery):
+    req_id = int(callback.data.split("_")[2])
+    pay = await db.get_payment_request(req_id)
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    
+    if not pay:
+        await callback.answer("❌ Төлем табылмады." if lang == 'kz' else "❌ Пополнение не найдено.")
+        return
+        
+    # pay: (id, user_id, amount, method, receipt_file_id, comment_code, status, created_at)
+    status_text = "✅ Расталды / Одобрено" if pay[6] == 'approved' else "⏳ Күтілуде / Ожидание" if pay[6] == 'pending' else "❌ Бас тартылды / Отклонено"
+    
+    from keyboards import payment_details_kb
+    await callback.message.edit_text(
+        TEXTS[lang]['payment_details'].format(
+            id=pay[0],
+            amount=pay[2],
+            method=pay[3],
+            code=pay[5] or "—",
+            status=status_text,
+            date=pay[7]
+        ),
+        reply_markup=payment_details_kb(lang),
         parse_mode="Markdown"
     )
     await callback.answer()
