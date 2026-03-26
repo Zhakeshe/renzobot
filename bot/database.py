@@ -86,6 +86,7 @@ class Database:
                     amount REAL,
                     method TEXT,
                     receipt_file_id TEXT,
+                    comment_code TEXT,
                     status TEXT DEFAULT 'pending',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -116,6 +117,12 @@ class Database:
                 except: pass
                 await db.execute("INSERT OR REPLACE INTO migrations (version) VALUES (3)")
 
+            if version < 4:
+                try:
+                    await db.execute("ALTER TABLE payment_requests ADD COLUMN comment_code TEXT")
+                except: pass
+                await db.execute("INSERT OR REPLACE INTO migrations (version) VALUES (4)")
+
             await db.commit()
 
     async def update_anti_fraud(self, user_id: int, ip: str, device: str):
@@ -130,11 +137,11 @@ class Database:
                 count = (await c.fetchone())[0]
                 return count > 2 # Егер 2-ден көп болса, күдікті
 
-    async def create_payment_request(self, user_id: int, amount: float, method: str, receipt_file_id: str = None):
+    async def create_payment_request(self, user_id: int, amount: float, method: str, receipt_file_id: str = None, comment_code: str = None):
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                "INSERT INTO payment_requests (user_id, amount, method, receipt_file_id) VALUES (?, ?, ?, ?)",
-                (user_id, amount, method, receipt_file_id)
+                "INSERT INTO payment_requests (user_id, amount, method, receipt_file_id, comment_code) VALUES (?, ?, ?, ?, ?)",
+                (user_id, amount, method, receipt_file_id, comment_code)
             )
             req_id = cursor.lastrowid
             await db.commit()

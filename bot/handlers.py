@@ -1,4 +1,5 @@
 from aiogram import Router, F
+import random
 from aiogram.filters import CommandStart, CommandObject
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
@@ -58,6 +59,9 @@ load_dotenv()
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 KZT_RATE = float(os.getenv("RUB_KZT_RATE", 5.2))
 REF_PERCENT = float(os.getenv("REFERRAL_PERCENT", 0.05))
+STARS_RATE_KZT = float(os.getenv("STARS_RATE_KZT", 15.0))
+CRYPTO_BOT_TOKEN = os.getenv("CRYPTO_BOT_TOKEN")
+MARGIN = 1.15
 
 TEXTS = {
     'kz': {
@@ -691,60 +695,178 @@ async def start_topup(callback: CallbackQuery):
 async def topup_kaspi(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     lang = user[4] if user else 'kz'
-    await callback.message.edit_text(
-        "💳 **Kaspi арқылы толтыру**\n\n"
-        "1. `+7 700 123 45 67` нөміріне (Аты-жөні: РЕНЗО) қажетті соманы аударыңыз.\n"
-        "2. Аударма жасалған соң, чекті (скриншот) осы чатқа жіберіңіз.\n\n"
-        "⚠️ Чексіз төлем қабылданбайды!" if lang == 'kz' else
-        "💳 **Пополнение через Kaspi**\n\n"
-        "1. Переведите нужную сумму на номер `+7 700 123 45 67` (Имя: РЕНЗО).\n"
-        "2. После перевода отправьте чек (скриншот) в этот чат.\n\n"
-        "⚠️ Без чека оплата не принимается!",
-        parse_mode="Markdown"
-    )
-    await state.set_state(TopupState.waiting_for_amount) # Reuse for receipt
+    text = "💳 **Kaspi арқылы толтыру**\n\nТолтыру сомасын енгізіңіз (₸):" if lang == 'kz' else "💳 **Пополнение через Kaspi**\n\nВведите сумму пополнения (₸):"
+    await callback.message.edit_text(text, parse_mode="Markdown")
+    await state.set_state(TopupState.waiting_for_amount)
+    await state.update_data(method="kaspi")
     await callback.answer()
 
-@router.message(TopupState.waiting_for_amount, F.photo)
-async def process_kaspi_receipt(message: Message, state: FSMContext):
+@router.callback_query(F.data == "topup_cryptobot")
+async def topup_cryptobot(callback: CallbackQuery, state: FSMContext):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    text = (
+        "🎩 **CryptoBot арқылы толтыру**\n\n"
+        "Алу сомасы төлем жүйелерінің комиссиясына байланысты төлем сомасынан өзгеше болуы мүмкін.\n\n"
+        "Барлық толтырулар автоматты түрде рубльге айырбасталады.\n\n"
+        "✏️ Толтыру сомасын рубльмен енгізіңіз:"
+        if lang == 'kz' else
+        "🎩 **Пополнение через CryptoBot**\n\n"
+        "Сумма к получению может отличаться от суммы к оплате из-за комиссии платёжных систем.\n\n"
+        "Все пополнения автоматически конвертируются в рубли.\n\n"
+        "✏️ Введите сумму пополнения в рублях:"
+    )
+    await callback.message.edit_text(text, parse_mode="Markdown")
+    await state.set_state(TopupState.waiting_for_amount)
+    await state.update_data(method="cryptobot")
+    await callback.answer()
+
+@router.message(TopupState.waiting_for_amount, F.text)
+async def process_amount_for_payment(message: Message, state: FSMContext):
+    if not message.text.isdigit():
+        await message.answer("❌ Тек сандарды енгізіңіз.")
+        return
+    
+    amount = float(message.text)
+    data = await state.get_data()
+    method = data.get("method")
     user = await db.get_user(message.from_user.id)
     lang = user[4] if user else 'kz'
     
-    photo_id = message.photo[-1].file_id
-    req_id = await db.create_payment_request(message.from_user.id, 0, "kaspi", photo_id)
+    if method == "kaspi":
+        # Generate random code
+        random_code = random.randint(1000000000, 9999999999)
+        comment_code = f"{random_code}_{message.from_user.id}"
+        
+        req_id = await db.create_payment_request(message.from_user.id, amount, "kaspi", comment_code=comment_code)
+        
+        from keyboards import payment_paid_kb
+        text = (
+            f"💳 **Kaspi арқылы аударым**\n\n"
+            f"1. `+7 700 123 45 67` нөміріне (Аты-жөні: РЕНЗО) аударыңыз.\n"
+            f"2. Сома: `{amount} ₸`\n"
+            f"3. **МАҢЫЗДЫ:** Түсініктемеге (комментарий) мына кодты жазыңыз: `{comment_code}`\n\n"
+            f"⚠️ Кодсыз төлем қабылданбайды! Төлеген соң төмендегі батырманы басыңыз."
+            if lang == 'kz' else
+            f"💳 **Перевод через Kaspi**\n\n"
+            f"1. Переведите на номер `+7 700 123 45 67` (Имя: РЕНЗО).\n"
+            f"2. Сумма: `{amount} ₸`\n"
+            f"3. **ВАЖНО:** В комментарии обязательно укажите код: `{comment_code}`\n\n"
+            f"⚠️ Без кода оплата не принимается! После оплаты нажмите кнопку ниже."
+        )
+        await message.answer(text, reply_markup=payment_paid_kb(req_id, lang), parse_mode="Markdown")
+        await state.clear()
+
+    elif method == "cryptobot":
+        # Generate random code for CryptoBot too
+        random_code = random.randint(1000000000, 9999999999)
+        comment_code = f"{random_code}_{message.from_user.id}"
+        
+        # amount here is in RUB as per user request
+        req_id = await db.create_payment_request(message.from_user.id, amount, "cryptobot", comment_code=comment_code)
+        
+        from keyboards import payment_paid_kb
+        text = (
+            f"🎩 **CryptoBot арқылы аударым**\n\n"
+            f"1. CryptoBot-тағы әмияныңызға өтіңіз.\n"
+            f"2. Сома: `{amount} RUB`\n"
+            f"3. **МАҢЫЗДЫ:** Түсініктемеге (комментарий) мына кодты жазыңыз: `{comment_code}`\n\n"
+            f"⚠️ Важно: Обязательно укажите комментарий `{comment_code}` при переводе!\n\n"
+            f"Төлеген соң төмендегі батырманы басыңыз."
+            if lang == 'kz' else
+            f"🎩 **Перевод через CryptoBot**\n\n"
+            f"1. Перейдите в свой кошелек в CryptoBot.\n"
+            f"2. Сумма: `{amount} RUB`\n"
+            f"3. **ВАЖНО:** В комментарии обязательно укажите код: `{comment_code}`\n\n"
+            f"⚠️ Важно: Обязательно укажите комментарий `{comment_code}` при переводе!\n\n"
+            f"После оплаты нажмите кнопку ниже."
+        )
+        await message.answer(text, reply_markup=payment_paid_kb(req_id, lang), parse_mode="Markdown")
+        await state.clear()
+
+    elif method == "stars":
+        prices = [LabeledPrice(label="Telegram Stars", amount=int(amount))]
+        await message.bot.send_invoice(
+            message.chat.id,
+            title="Теңгерімді толтыру (Stars)" if lang == 'kz' else "Пополнение баланса (Stars)",
+            description=f"Бот теңгерімін {amount} Stars арқылы толтыру" if lang == 'kz' else f"Пополнение баланса бота через {amount} Stars",
+            provider_token="", # Empty for Stars
+            currency="XTR",
+            prices=prices,
+            payload=f"topup_stars_{message.from_user.id}_{amount}"
+        )
+        await state.clear()
+
+@router.callback_query(F.data.startswith("pay_confirm_"))
+async def user_confirm_payment(callback: CallbackQuery):
+    req_id = int(callback.data.split("_")[2])
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
     
-    await message.answer(
-        "✅ Чек қабылданды! Админ тексерген соң теңгеріміңіз толтырылады." if lang == 'kz' else
-        "✅ Чек принят! Баланс будет пополнен после проверки админом."
+    req = await db.get_payment_request(req_id)
+    if not req:
+        await callback.answer("❌ Сұраныс табылмады.")
+        return
+
+    await callback.message.edit_text(
+        "⏳ **Тексерілуде...**\n\nАдмин төлемді тексеріп жатыр. Расталған соң сізге хабарлама келеді." if lang == 'kz' else
+        "⏳ **Проверяется...**\n\nАдмин проверяет ваш платеж. После подтверждения вам придет уведомление.",
+        parse_mode="Markdown"
     )
     
     # Notify admin
     try:
         from keyboards import admin_payment_request_kb
-        await message.bot.send_photo(
+        await callback.bot.send_message(
             ADMIN_ID,
-            photo_id,
-            caption=f"💳 **Жаңа төлем сұранысы!**\n\nID: `{message.from_user.id}`\nUsername: `@{message.from_user.username}`\nСұраныс ID: `#{req_id}`",
+            f"💳 **Жаңа төлем сұранысы (Кодпен)!**\n\n"
+            f"👤 Пайдаланушы: @{callback.from_user.username or callback.from_user.id}\n"
+            f"💰 Сома: `{req[2]} ₸`\n"
+            f"🔑 Код: `{req[5]}`\n"
+            f"Сұраныс ID: `#{req_id}`\n\n"
+            f"Төлемді тексеріп, растаңыз.",
             reply_markup=admin_payment_request_kb(req_id),
             parse_mode="Markdown"
         )
-    except:
-        pass
-        
-    await state.clear()
+    except: pass
+    await callback.answer()
 
 @router.callback_query(F.data.startswith("adm_pay_approve_"), F.from_user.id == ADMIN_ID)
 async def admin_approve_payment(callback: CallbackQuery, state: FSMContext):
     req_id = int(callback.data.split("_")[3])
     req = await db.get_payment_request(req_id)
     
-    if req and req[5] == 'pending':
+    if req and req[6] == 'pending':
         await db.update_payment_request_status(req_id, 'approved')
-        # Ask for amount to add
-        await callback.message.answer(f"💰 Сұраныс #{req_id} үшін соманы енгізіңіз (₸):")
-        await state.update_data(approve_req_id=req_id, approve_user_id=req[1])
-        await state.set_state(AdminState.waiting_for_balance)
+        user_id = req[1]
+        amount = req[2]
+        
+        if amount > 0:
+            # If amount was already specified in request
+            await db.update_balance(user_id, amount)
+            await db.update_payment_request_status(req_id, 'completed')
+            await callback.message.answer(f"✅ Пайдаланушыға {amount} ₸ қосылды!")
+            try:
+                await callback.bot.send_message(user_id, f"✅ Сіздің төлеміңіз расталды! Теңгеріміңізге `{amount} ₸` қосылды.", parse_mode="Markdown")
+            except: pass
+        else:
+            # Ask for amount if it was 0 (old flow)
+            await callback.message.answer(f"💰 Сұраныс #{req_id} үшін соманы енгізіңіз (₸):")
+            await state.update_data(approve_req_id=req_id, approve_user_id=req[1])
+            await state.set_state(AdminState.waiting_for_balance)
     
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("adm_pay_reject_"), F.from_user.id == ADMIN_ID)
+async def admin_reject_payment(callback: CallbackQuery):
+    req_id = int(callback.data.split("_")[3])
+    req = await db.get_payment_request(req_id)
+    if req:
+        await db.update_payment_request_status(req_id, 'rejected')
+        await callback.message.edit_text(f"❌ Сұраныс #{req_id} қабылданбады.")
+        try:
+            await callback.bot.send_message(req[1], "❌ Сіздің төлеміңіз қабылданбады. Қолдау қызметіне хабарласыңыз.")
+        except: pass
     await callback.answer()
 
 @router.message(AdminState.waiting_for_balance, F.from_user.id == ADMIN_ID)
@@ -790,86 +912,6 @@ async def show_referral(callback: CallbackQuery):
     await callback.message.answer(TEXTS[lang]['ref'].format(link=link, count=count, earned=earned, percent=int(REF_PERCENT*100)), parse_mode="Markdown")
     await callback.answer()
 
-from aiogram.types import Message, CallbackQuery, LabeledPrice, PreCheckoutQuery
-import httpx
-
-CRYPTO_BOT_TOKEN = os.getenv("CRYPTO_BOT_TOKEN")
-STARS_RATE_KZT = 15.0 # 1 Star = 15 KZT
-
-@router.callback_query(F.data == "topup_stars")
-async def topup_stars(callback: CallbackQuery, state: FSMContext):
-    user = await db.get_user(callback.from_user.id)
-    lang = user[4] if user else 'kz'
-    await callback.message.edit_text(
-        "🌟 **Telegram Stars арқылы толтыру**\n\nҚанша Stars алғыңыз келеді?" if lang == 'kz' else
-        "🌟 **Пополнение через Telegram Stars**\n\nСколько Stars вы хотите купить?",
-        parse_mode="Markdown"
-    )
-    await state.set_state(TopupState.waiting_for_amount)
-    await state.update_data(method="stars")
-    await callback.answer()
-
-@router.callback_query(F.data == "topup_cryptobot")
-async def topup_cryptobot(callback: CallbackQuery, state: FSMContext):
-    user = await db.get_user(callback.from_user.id)
-    lang = user[4] if user else 'kz'
-    await callback.message.edit_text(
-        "🤖 **CryptoBot арқылы толтыру**\n\nСоманы енгізіңіз (₸):" if lang == 'kz' else
-        "🤖 **Пополнение через CryptoBot**\n\nВведите сумму (₸):",
-        parse_mode="Markdown"
-    )
-    await state.set_state(TopupState.waiting_for_amount)
-    await state.update_data(method="cryptobot")
-    await callback.answer()
-
-@router.message(TopupState.waiting_for_amount, F.text)
-async def process_amount_for_payment(message: Message, state: FSMContext):
-    if not message.text.isdigit():
-        await message.answer("❌ Тек сандарды енгізіңіз.")
-        return
-    
-    amount = float(message.text)
-    data = await state.get_data()
-    method = data.get("method")
-    
-    if method == "stars":
-        prices = [LabeledPrice(label="Telegram Stars", amount=int(amount))]
-        await message.bot.send_invoice(
-            message.chat.id,
-            title="Теңгерімді толтыру (Stars)",
-            description=f"Бот теңгерімін {amount} Stars арқылы толтыру",
-            provider_token="", # Empty for Stars
-            currency="XTR",
-            prices=prices,
-            payload=f"topup_stars_{message.from_user.id}_{amount}"
-        )
-    elif method == "cryptobot":
-        # Create CryptoBot invoice
-        async with httpx.AsyncClient() as client:
-            # We need to convert KZT to USD or similar if CryptoBot doesn't support KZT
-            # For now, let's assume we use USD and 1 USD = 450 KZT
-            usd_amount = amount / 450
-            resp = await client.post(
-                "https://pay.crypt.bot/api/createInvoice",
-                headers={"Crypto-Pay-API-Token": CRYPTO_BOT_TOKEN},
-                json={
-                    "asset": "USDT",
-                    "amount": f"{usd_amount:.2f}",
-                    "description": f"Topup {amount} KZT",
-                    "payload": f"topup_{message.from_user.id}_{amount}"
-                }
-            )
-            res_data = resp.json()
-            if res_data.get("ok"):
-                pay_url = res_data["result"]["pay_url"]
-                from aiogram.utils.keyboard import InlineKeyboardBuilder
-                builder = InlineKeyboardBuilder()
-                builder.button(text="💳 Төлеу / Оплатить", url=pay_url)
-                await message.answer(f"🤖 CryptoBot арқылы `{amount} ₸` төлеу үшін төмендегі батырманы басыңыз:", reply_markup=builder.as_markup(), parse_mode="Markdown")
-            else:
-                await message.answer(f"❌ Қате: {res_data.get('error')}")
-    
-    await state.clear()
 
 @router.pre_checkout_query()
 async def process_pre_checkout(pre_checkout_query: PreCheckoutQuery):
@@ -914,47 +956,6 @@ async def process_successful_payment(message: Message):
 async def show_support(callback: CallbackQuery):
     await callback.message.answer("🛠 Қолдау қызметі: @renzo_support")
     await callback.answer()
-
-@router.callback_query(F.data == "topup")
-async def start_topup(callback: CallbackQuery, state: FSMContext):
-    await callback.message.answer("💰 Толтырғыңыз келетін соманы енгізіңіз (₸):")
-    await state.set_state(TopupState.waiting_for_amount)
-    await callback.answer()
-
-@router.message(TopupState.waiting_for_amount)
-async def process_topup(message: Message, state: FSMContext):
-    if not message.text.isdigit():
-        await message.answer("❌ Тек сандарды енгізіңіз.")
-        return
-    
-    amount = float(message.text)
-    if amount < 100:
-        await message.answer("❌ Ең аз толтыру сомасы - 100 ₸")
-        return
-
-    user_id = message.from_user.id
-    user = await db.get_user(user_id)
-    
-    # Балансты толтыру
-    await db.update_balance(user_id, amount)
-    await message.answer(f"✅ Теңгеріміңіз `{amount:.2f} ₸`-ге толтырылды!", parse_mode="Markdown")
-    
-    # Реферал бонусы
-    if user and user[3]: # referred_by
-        referrer_id = user[3]
-        bonus = amount * REF_PERCENT
-        await db.add_referral_earning(referrer_id, bonus)
-        
-        try:
-            await message.bot.send_message(
-                referrer_id, 
-                f"💰 Рефералыңыз теңгерімін толтырды! Сізге `{bonus:.2f} ₸` бонус түсті.",
-                parse_mode="Markdown"
-            )
-        except:
-            pass # Реферер ботты блоктаған болуы мүмкін
-
-    await state.clear()
 
 @router.callback_query(F.data == "promocode")
 async def show_promocode(callback: CallbackQuery, state: FSMContext):
@@ -1664,5 +1665,79 @@ async def view_order(callback: CallbackQuery):
         ),
         reply_markup=order_details_kb(order[0], lang),
         parse_mode="Markdown"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "calculator")
+async def show_calculator(callback: CallbackQuery):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    from keyboards import calculator_kb
+    text = "🧮 **Калькулятор**\n\nАйырбастау бағытын таңдаңыз:" if lang == 'kz' else "🧮 **Калькулятор**\n\nВыберите направление обмена:"
+    await callback.message.edit_text(text, reply_markup=calculator_kb(lang), parse_mode="Markdown")
+    await callback.answer()
+
+@router.callback_query(F.data == "calc_stars_kzt")
+async def calc_stars(callback: CallbackQuery, state: FSMContext):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    text = "🌟 **Stars ➔ ₸**\n\nStars мөлшерін енгізіңіз:" if lang == 'kz' else "🌟 **Stars ➔ ₸**\n\nВведите количество Stars:"
+    await callback.message.edit_text(text, parse_mode="Markdown")
+    await state.set_state(CalculatorState.waiting_for_stars)
+    await callback.answer()
+
+@router.message(CalculatorState.waiting_for_stars, F.text)
+async def process_calc_stars(message: Message, state: FSMContext):
+    if not message.text.isdigit():
+        await message.answer("❌ Тек сандарды енгізіңіз.")
+        return
+    
+    stars = int(message.text)
+    kzt = stars * STARS_RATE_KZT
+    user = await db.get_user(message.from_user.id)
+    lang = user[4] if user else 'kz'
+    
+    text = f"🧮 **Нәтиже:**\n\n`{stars} Stars` = `{kzt:.2f} ₸`" if lang == 'kz' else f"🧮 **Результат:**\n\n`{stars} Stars` = `{kzt:.2f} ₸`"
+    from keyboards import calculator_kb
+    await message.answer(text, reply_markup=calculator_kb(lang), parse_mode="Markdown")
+    await state.clear()
+
+@router.callback_query(F.data == "calc_ton_kzt")
+async def calc_ton(callback: CallbackQuery, state: FSMContext):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    text = "💎 **TON ➔ ₸**\n\nTON мөлшерін енгізіңіз:" if lang == 'kz' else "💎 **TON ➔ ₸**\n\nВведите количество TON:"
+    await callback.message.edit_text(text, parse_mode="Markdown")
+    await state.set_state(CalculatorState.waiting_for_ton)
+    await callback.answer()
+
+@router.message(CalculatorState.waiting_for_ton, F.text)
+async def process_calc_ton(message: Message, state: FSMContext):
+    try:
+        ton = float(message.text.replace(',', '.'))
+    except ValueError:
+        await message.answer("❌ Қате формат.")
+        return
+    
+    # Placeholder TON rate: 1 TON = 2500 KZT
+    ton_rate = 2500.0 
+    kzt = ton * ton_rate
+    user = await db.get_user(message.from_user.id)
+    lang = user[4] if user else 'kz'
+    
+    text = f"🧮 **Нәтиже:**\n\n`{ton} TON` = `{kzt:.2f} ₸`" if lang == 'kz' else f"🧮 **Результат:**\n\n`{ton} TON` = `{kzt:.2f} ₸`"
+    from keyboards import calculator_kb
+    await message.answer(text, reply_markup=calculator_kb(lang), parse_mode="Markdown")
+    await state.clear()
+
+@router.callback_query(F.data == "back_to_main")
+async def back_to_main(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    from keyboards import main_menu_kb
+    await callback.message.edit_text(
+        TEXTS[lang]['start'].format(name=callback.from_user.full_name),
+        reply_markup=main_menu_kb(callback.from_user.id == ADMIN_ID, lang)
     )
     await callback.answer()
