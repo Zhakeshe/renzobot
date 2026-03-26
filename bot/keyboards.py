@@ -1,10 +1,17 @@
 from aiogram import types
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+
+def main_reply_kb(lang: str = 'kz'):
+    builder = ReplyKeyboardBuilder()
+    text = "🏠 Мәзір / Меню"
+    builder.button(text=text)
+    return builder.as_markup(resize_keyboard=True)
 
 def top_referrers_kb(lang: str = 'kz'):
     builder = InlineKeyboardBuilder()
     back_text = "‹ Артқа" if lang == 'kz' else "‹ Назад"
-    builder.button(text=back_text, callback_data="referral")
+    builder.button(text=f"🔙 {back_text}", callback_data="referral")
     return builder.as_markup()
 
 def payment_methods_kb(lang: str = 'kz'):
@@ -13,12 +20,12 @@ def payment_methods_kb(lang: str = 'kz'):
         builder.button(text="💳 Kaspi (Аударма)", callback_data="topup_kaspi")
         builder.button(text="🤖 CryptoBot", callback_data="topup_cryptobot")
         builder.button(text="🌟 Telegram Stars", callback_data="topup_stars")
-        builder.button(text="‹ Артқа", callback_data="profile")
+        builder.button(text="🔙 Артқа", callback_data="profile")
     else:
         builder.button(text="💳 Kaspi (Перевод)", callback_data="topup_kaspi")
         builder.button(text="🤖 CryptoBot", callback_data="topup_cryptobot")
         builder.button(text="🌟 Telegram Stars", callback_data="topup_stars")
-        builder.button(text="‹ Назад", callback_data="profile")
+        builder.button(text="🔙 Назад", callback_data="profile")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -72,6 +79,19 @@ def main_menu_kb(is_admin: bool = False, lang: str = 'kz'):
         builder.button(text="📊 Админ панель", callback_data="admin_panel")
     
     builder.adjust(2, 2, 1, 1, 1, 2, 2, 1, 1, 1, 1, 1, 1)
+    return builder.as_markup()
+
+def calculator_kb(lang: str = 'kz'):
+    builder = InlineKeyboardBuilder()
+    if lang == 'kz':
+        builder.button(text="🌟 Stars ➔ ₸", callback_data="calc_stars_kzt")
+        builder.button(text="💎 TON ➔ ₸", callback_data="calc_ton_kzt")
+        builder.button(text="🔙 Артқа", callback_data="back_to_main")
+    else:
+        builder.button(text="🌟 Stars ➔ ₸", callback_data="calc_stars_kzt")
+        builder.button(text="💎 TON ➔ ₸", callback_data="calc_ton_kzt")
+        builder.button(text="🔙 Назад", callback_data="back_to_main")
+    builder.adjust(1)
     return builder.as_markup()
 
 def language_kb():

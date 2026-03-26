@@ -5,7 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from database import Database
 from api_client import APIClient
-from keyboards import main_menu_kb, profile_kb, language_kb, admin_kb, stars_items_kb
+from keyboards import main_menu_kb, profile_kb, language_kb, admin_kb, stars_items_kb, main_reply_kb, calculator_kb
 import os
 from dotenv import load_dotenv
 
@@ -48,6 +48,10 @@ class TONState(StatesGroup):
 class SellStarsState(StatesGroup):
     waiting_for_amount = State()
     waiting_for_address = State()
+
+class CalculatorState(StatesGroup):
+    waiting_for_stars = State()
+    waiting_for_ton = State()
 
 load_dotenv()
 
@@ -138,6 +142,28 @@ async def cmd_start(message: Message, command: CommandObject):
     lang = user[4] if user else 'kz'
     is_admin = message.from_user.id == ADMIN_ID
     
+    stars_count, gifts_count, usernames_count = await db.get_global_stats()
+    
+    await message.answer(
+        TEXTS[lang]['start'].format(
+            balance=user[1],
+            stars_count=stars_count,
+            gifts_count=gifts_count,
+            usernames_count=usernames_count
+        ),
+        reply_markup=main_reply_kb(lang),
+        parse_mode="Markdown"
+    )
+    await message.answer(
+        "Төмендегі мәзірді қолданыңыз 👇" if lang == 'kz' else "Используйте меню ниже 👇",
+        reply_markup=main_menu_kb(is_admin, lang)
+    )
+
+@router.message(F.text == "🏠 Мәзір / Меню")
+async def manual_menu(message: Message):
+    user = await db.get_user(message.from_user.id)
+    lang = user[4] if user else 'kz'
+    is_admin = message.from_user.id == ADMIN_ID
     stars_count, gifts_count, usernames_count = await db.get_global_stats()
     
     await message.answer(
@@ -774,7 +800,7 @@ STARS_RATE_KZT = 15.0 # 1 Star = 15 KZT
 async def topup_stars(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     lang = user[4] if user else 'kz'
-    await callback.message.answer(
+    await callback.message.edit_text(
         "🌟 **Telegram Stars арқылы толтыру**\n\nҚанша Stars алғыңыз келеді?" if lang == 'kz' else
         "🌟 **Пополнение через Telegram Stars**\n\nСколько Stars вы хотите купить?",
         parse_mode="Markdown"
@@ -787,7 +813,7 @@ async def topup_stars(callback: CallbackQuery, state: FSMContext):
 async def topup_cryptobot(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     lang = user[4] if user else 'kz'
-    await callback.message.answer(
+    await callback.message.edit_text(
         "🤖 **CryptoBot арқылы толтыру**\n\nСоманы енгізіңіз (₸):" if lang == 'kz' else
         "🤖 **Пополнение через CryptoBot**\n\nВведите сумму (₸):",
         parse_mode="Markdown"
@@ -859,6 +885,24 @@ async def process_successful_payment(message: Message):
         kzt_amount = stars_amount * STARS_RATE_KZT
         await db.update_balance(user_id, kzt_amount)
         await message.answer(f"✅ Теңгеріміңіз `{kzt_amount:.2f} ₸` сомасына сәтті толтырылды! (Stars: {stars_amount})", parse_mode="Markdown")
+    elif payload.startswith("sell_stars_"):
+        _, _, user_id, amount, address = payload.split("_")
+        user_id = int(user_id)
+        amount = int(amount)
+        
+        # Notify admin
+        try:
+            await message.bot.send_message(
+                ADMIN_ID,
+                f"💰 **Stars Сату сұранысы (Төленді)!**\n\n"
+                f"👤 Пайдаланушы: @{message.from_user.username or user_id}\n"
+                f"🌟 Сома: `{amount} Stars`\n"
+                f"📬 TON Адрес: `{address}`\n\n"
+                f"Пайдаланушы Stars жіберді. Енді оған TON немесе ₸ жіберіңіз.",
+                parse_mode="Markdown"
+            )
+        except: pass
+        await message.answer("✅ Төлем қабылданды! Админ жақын арада сізбен хабарласады немесе көрсетілген адрес бойынша төлем жасайды.")
     elif payload.startswith("topup_"):
         _, user_id, amount = payload.split("_")
         user_id = int(user_id)
@@ -966,12 +1010,37 @@ async def process_ton_amount(message: Message, state: FSMContext):
 async def process_ton_address(message: Message, state: FSMContext, api: APIClient):
     data = await state.get_data()
     address = message.text.strip()
+    user_id = message.from_user.id
+    user = await db.get_user(user_id)
     
-    res = await api.place_ton_order(address, data['amount'])
-    if res.get("success"):
-        await message.answer(f"✅ TON тапсырысы қабылданды! Сома: `{data['amount']} TON`", parse_mode="Markdown")
-    else:
-        await message.answer(f"❌ Қате: {res.get('error')}")
+    # Calculate price
+    ton_amount = data['amount']
+    ton_rate = 2500 * MARGIN # Base rate
+    total_price = ton_amount * ton_rate
+    
+    if user[1] < total_price:
+        await message.answer(f"❌ Қаражат жеткіліксіз. Қажет: `{total_price:.2f} ₸`", parse_mode="Markdown")
+        await state.clear()
+        return
+
+    # Deduct balance
+    await db.update_balance(user_id, -total_price)
+    
+    # Notify admin
+    try:
+        await message.bot.send_message(
+            ADMIN_ID,
+            f"💎 **TON Сатып алу сұранысы!**\n\n"
+            f"👤 Пайдаланушы: @{message.from_user.username or user_id}\n"
+            f"💰 Сома: `{ton_amount} TON`\n"
+            f"💵 Төленді: `{total_price:.2f} ₸`\n"
+            f"📬 Адрес: `{address}`\n\n"
+            f"Өтінеміз, TON жіберіңіз.",
+            parse_mode="Markdown"
+        )
+    except: pass
+    
+    await message.answer(f"✅ Тапсырыс қабылданды! Админ жақын арада `{ton_amount} TON` жібереді.", parse_mode="Markdown")
     await state.clear()
 
 @router.callback_query(F.data == "sell_stars")
@@ -997,15 +1066,27 @@ async def process_sell_stars_amount(message: Message, state: FSMContext):
     await state.set_state(SellStarsState.waiting_for_address)
 
 @router.message(SellStarsState.waiting_for_address)
-async def process_sell_stars_address(message: Message, state: FSMContext, api: APIClient):
+async def process_sell_stars_address(message: Message, state: FSMContext):
     data = await state.get_data()
     address = message.text.strip()
+    amount = data['amount']
+    user_id = message.from_user.id
     
-    res = await api.place_sell_stars_order(data['amount'], address)
-    if res.get("success"):
-        await message.answer(f"✅ Stars сату тапсырысы қабылданды! Мөлшер: `{data['amount']} Stars`", parse_mode="Markdown")
-    else:
-        await message.answer(f"❌ Қате: {res.get('error')}")
+    await state.update_data(address=address)
+    
+    # Send invoice for Stars
+    from aiogram.types import LabeledPrice
+    prices = [LabeledPrice(label="Sell Stars", amount=amount)]
+    await message.bot.send_invoice(
+        message.chat.id,
+        title="Stars сату",
+        description=f"{amount} Stars сату үшін төлем жасаңыз. Админ сізге TON жібереді.",
+        provider_token="",
+        currency="XTR",
+        prices=prices,
+        payload=f"sell_stars_{user_id}_{amount}_{address}"
+    )
+    await message.answer("⏳ Төлемді күтудеміз... Төлеген соң админге хабарлама барады.")
     await state.clear()
 
 @router.callback_query(F.data == "buy_premium")
@@ -1114,6 +1195,53 @@ async def show_nft_rental_menu(callback: CallbackQuery):
         parse_mode="Markdown"
     )
     await callback.answer()
+
+@router.callback_query(F.data == "calculator")
+async def show_calculator(callback: CallbackQuery):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    text = "🧮 **Калькулятор**\n\nАйырбастау бағасын есептеңіз:" if lang == 'kz' else "🧮 **Калькулятор**\n\nРассчитайте стоимость обмена:"
+    await callback.message.edit_text(text, reply_markup=calculator_kb(lang), parse_mode="Markdown")
+    await callback.answer()
+
+@router.callback_query(F.data == "calc_stars_kzt")
+async def calc_stars(callback: CallbackQuery, state: FSMContext):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    await callback.message.edit_text("🌟 Stars санын енгізіңіз:" if lang == 'kz' else "Введите количество Stars:")
+    await state.set_state(CalculatorState.waiting_for_stars)
+    await callback.answer()
+
+@router.message(CalculatorState.waiting_for_stars)
+async def process_calc_stars(message: Message, state: FSMContext):
+    if not message.text.isdigit():
+        await message.answer("❌ Тек сандарды енгізіңіз.")
+        return
+    stars = int(message.text)
+    kzt = stars * STARS_RATE_KZT
+    await message.answer(f"🌟 {stars} Stars = `{kzt:.2f} ₸`", parse_mode="Markdown")
+    await state.clear()
+
+@router.callback_query(F.data == "calc_ton_kzt")
+async def calc_ton(callback: CallbackQuery, state: FSMContext):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    await callback.message.edit_text("💎 TON санын енгізіңіз:" if lang == 'kz' else "Введите количество TON:")
+    await state.set_state(CalculatorState.waiting_for_ton)
+    await callback.answer()
+
+@router.message(CalculatorState.waiting_for_ton)
+async def process_calc_ton(message: Message, state: FSMContext, api: APIClient):
+    if not message.text.replace(".", "").isdigit():
+        await message.answer("❌ Тек сандарды енгізіңіз.")
+        return
+    ton = float(message.text)
+    # Get TON rate (placeholder or from API if available)
+    # For now, let's assume 1 TON = 2500 KZT as a base
+    ton_rate = 2500 * MARGIN
+    kzt = ton * ton_rate
+    await message.answer(f"💎 {ton} TON ≈ `{kzt:.2f} ₸`", parse_mode="Markdown")
+    await state.clear()
 
 @router.callback_query(F.data == "back_to_main")
 async def back_to_main(callback: CallbackQuery):

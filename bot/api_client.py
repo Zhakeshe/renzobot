@@ -22,6 +22,12 @@ class APIClient:
     def nano_to_rub(self, nano: int) -> float:
         return nano / 1_000_000_000
 
+    async def _safe_json(self, response: httpx.Response) -> Dict[str, Any]:
+        try:
+            return response.json()
+        except Exception:
+            return {"success": False, "error": f"Invalid JSON response: {response.text[:100]}"}
+
     async def get_balance(self) -> Dict[str, Any]:
         async with self.limiter:
             async with httpx.AsyncClient() as client:
@@ -29,8 +35,9 @@ class APIClient:
                     f"{self.base_url}/api/v1/client/balance",
                     headers=self.headers
                 )
-                response.raise_for_status()
-                return response.json()
+                if response.status_code != 200:
+                    return {"success": False, "error": f"HTTP {response.status_code}"}
+                return await self._safe_json(response)
 
     async def get_stars_rate(self) -> Dict[str, Any]:
         import time
@@ -45,8 +52,9 @@ class APIClient:
                         headers=self.headers,
                         timeout=10
                     )
-                    response.raise_for_status()
-                    data = response.json()
+                    if response.status_code != 200:
+                        return {"success": False, "error": f"HTTP {response.status_code}"}
+                    data = await self._safe_json(response)
                     
                     # Apply margin to the price
                     if data.get("success"):
@@ -71,7 +79,7 @@ class APIClient:
                         json={"username": username.replace("@", ""), "quantity": quantity},
                         timeout=15
                     )
-                    return response.json()
+                    return await self._safe_json(response)
             except Exception as e:
                 return {"success": False, "error": str(e)}
 
@@ -85,7 +93,7 @@ class APIClient:
                         json={"username": username.replace("@", ""), "months": months},
                         timeout=15
                     )
-                    return response.json()
+                    return await self._safe_json(response)
             except Exception as e:
                 return {"success": False, "error": str(e)}
 
@@ -98,7 +106,7 @@ class APIClient:
                         headers=self.headers,
                         timeout=10
                     )
-                    return response.json()
+                    return await self._safe_json(response)
             except Exception as e:
                 return {"success": False, "error": str(e)}
 
@@ -116,7 +124,7 @@ class APIClient:
                         params=params,
                         timeout=15
                     )
-                    data = response.json()
+                    data = await self._safe_json(response)
                     if data.get("success") and "items" in data:
                         for item in data["items"]:
                             if "price_per_day_rub" in item:
@@ -135,7 +143,7 @@ class APIClient:
                         params={"nft_address": nft_address, "days": days},
                         timeout=10
                     )
-                    data = response.json()
+                    data = await self._safe_json(response)
                     if data.get("success"):
                         if "price_per_day_rub" in data:
                             data["price_per_day_rub_with_margin"] = self._apply_margin(data["price_per_day_rub"])
@@ -155,7 +163,7 @@ class APIClient:
                         json={"nft_address": nft_address, "days": days},
                         timeout=20
                     )
-                    return response.json()
+                    return await self._safe_json(response)
             except Exception as e:
                 return {"success": False, "error": str(e)}
 
@@ -169,7 +177,7 @@ class APIClient:
                         json={"transaction_id": transaction_id, "tonconnect_url": tonconnect_url},
                         timeout=15
                     )
-                    return response.json()
+                    return await self._safe_json(response)
             except Exception as e:
                 return {"success": False, "error": str(e)}
 
@@ -183,7 +191,7 @@ class APIClient:
                         json={"address": address, "amount": amount},
                         timeout=15
                     )
-                    return response.json()
+                    return await self._safe_json(response)
             except Exception as e:
                 return {"success": False, "error": str(e)}
 
@@ -197,7 +205,7 @@ class APIClient:
                         json={"quantity": quantity, "ton_address": ton_address},
                         timeout=15
                     )
-                    return response.json()
+                    return await self._safe_json(response)
             except Exception as e:
                 return {"success": False, "error": str(e)}
 
@@ -208,7 +216,7 @@ class APIClient:
                     f"{self.base_url}/api/v1/client/orders/{order_id}",
                     headers=self.headers
                 )
-                return response.json()
+                return await self._safe_json(response)
 
     async def get_stars_items(self) -> Dict[str, Any]:
         async with self.limiter:
@@ -219,7 +227,7 @@ class APIClient:
                         headers=self.headers,
                         timeout=10
                     )
-                    data = response.json()
+                    data = await self._safe_json(response)
                     if data.get("success") and "items" in data:
                         for item in data["items"]:
                             if "price_rub" in item:
@@ -246,7 +254,7 @@ class APIClient:
                     async with httpx.AsyncClient() as client:
                         response = await client.get(url, headers=self.headers, timeout=10)
                         if response.status_code == 200:
-                            data = response.json()
+                            data = await self._safe_json(response)
                             if data.get("success"):
                                 # Apply margin to prices if they exist in the response
                                 if "items" in data:
@@ -261,3 +269,4 @@ class APIClient:
                     last_error = str(e)
             
             return {"success": False, "error": last_error}
+
