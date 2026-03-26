@@ -12,12 +12,12 @@ def payment_methods_kb(lang: str = 'kz'):
     if lang == 'kz':
         builder.button(text="💳 Kaspi (Аударма)", callback_data="topup_kaspi")
         builder.button(text="🤖 CryptoBot", callback_data="topup_cryptobot")
-        builder.button(text="💎 Telegram Payments", callback_data="topup_tgpay")
+        builder.button(text="🌟 Telegram Stars", callback_data="topup_stars")
         builder.button(text="‹ Артқа", callback_data="profile")
     else:
         builder.button(text="💳 Kaspi (Перевод)", callback_data="topup_kaspi")
         builder.button(text="🤖 CryptoBot", callback_data="topup_cryptobot")
-        builder.button(text="💎 Telegram Payments", callback_data="topup_tgpay")
+        builder.button(text="🌟 Telegram Stars", callback_data="topup_stars")
         builder.button(text="‹ Назад", callback_data="profile")
     builder.adjust(1)
     return builder.as_markup()

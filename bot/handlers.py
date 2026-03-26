@@ -768,19 +768,19 @@ from aiogram.types import Message, CallbackQuery, LabeledPrice, PreCheckoutQuery
 import httpx
 
 CRYPTO_BOT_TOKEN = os.getenv("CRYPTO_BOT_TOKEN")
-PAYMENT_PROVIDER_TOKEN = os.getenv("PAYMENT_PROVIDER_TOKEN")
+STARS_RATE_KZT = 15.0 # 1 Star = 15 KZT
 
-@router.callback_query(F.data == "topup_tgpay")
-async def topup_tgpay(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data == "topup_stars")
+async def topup_stars(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     lang = user[4] if user else 'kz'
     await callback.message.answer(
-        "💎 **Telegram Payments арқылы толтыру**\n\nСоманы енгізіңіз (₸):" if lang == 'kz' else
-        "💎 **Пополнение через Telegram Payments**\n\nВведите сумму (₸):",
+        "🌟 **Telegram Stars арқылы толтыру**\n\nҚанша Stars алғыңыз келеді?" if lang == 'kz' else
+        "🌟 **Пополнение через Telegram Stars**\n\nСколько Stars вы хотите купить?",
         parse_mode="Markdown"
     )
     await state.set_state(TopupState.waiting_for_amount)
-    await state.update_data(method="tgpay")
+    await state.update_data(method="stars")
     await callback.answer()
 
 @router.callback_query(F.data == "topup_cryptobot")
@@ -806,16 +806,16 @@ async def process_amount_for_payment(message: Message, state: FSMContext):
     data = await state.get_data()
     method = data.get("method")
     
-    if method == "tgpay":
-        prices = [LabeledPrice(label="Теңгерімді толтыру", amount=int(amount * 100))] # KZT in cents
+    if method == "stars":
+        prices = [LabeledPrice(label="Telegram Stars", amount=int(amount))]
         await message.bot.send_invoice(
             message.chat.id,
-            title="Теңгерімді толтыру",
-            description=f"Бот теңгерімін {amount} ₸-ге толтыру",
-            provider_token=PAYMENT_PROVIDER_TOKEN,
-            currency="KZT",
+            title="Теңгерімді толтыру (Stars)",
+            description=f"Бот теңгерімін {amount} Stars арқылы толтыру",
+            provider_token="", # Empty for Stars
+            currency="XTR",
             prices=prices,
-            payload=f"topup_{message.from_user.id}_{amount}"
+            payload=f"topup_stars_{message.from_user.id}_{amount}"
         )
     elif method == "cryptobot":
         # Create CryptoBot invoice
@@ -852,7 +852,14 @@ async def process_pre_checkout(pre_checkout_query: PreCheckoutQuery):
 @router.message(F.successful_payment)
 async def process_successful_payment(message: Message):
     payload = message.successful_payment.invoice_payload
-    if payload.startswith("topup_"):
+    if payload.startswith("topup_stars_"):
+        _, _, user_id, stars_amount = payload.split("_")
+        user_id = int(user_id)
+        stars_amount = float(stars_amount)
+        kzt_amount = stars_amount * STARS_RATE_KZT
+        await db.update_balance(user_id, kzt_amount)
+        await message.answer(f"✅ Теңгеріміңіз `{kzt_amount:.2f} ₸` сомасына сәтті толтырылды! (Stars: {stars_amount})", parse_mode="Markdown")
+    elif payload.startswith("topup_"):
         _, user_id, amount = payload.split("_")
         user_id = int(user_id)
         amount = float(amount)
