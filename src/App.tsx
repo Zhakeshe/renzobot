@@ -20,8 +20,11 @@ import { cn } from './lib/utils';
 
 // --- Components ---
 
-const Card = ({ children, className }: { children: React.ReactNode, className?: string, key?: any }) => (
-  <div className={cn("bg-slate-800/40 border border-slate-700/50 rounded-2xl p-4", className)}>
+const Card = ({ children, className, onClick }: { children: React.ReactNode, className?: string, onClick?: () => void, key?: any }) => (
+  <div 
+    onClick={onClick}
+    className={cn("bg-slate-800/40 border border-slate-700/50 rounded-2xl p-4", className)}
+  >
     {children}
   </div>
 );
@@ -57,6 +60,7 @@ export default function App() {
   const [adminStats, setAdminStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [expandedOrderId, setExpandedOrderId] = useState<number | null>(null);
 
   const tg = (window as any).Telegram?.WebApp;
 
@@ -244,21 +248,79 @@ export default function App() {
               <section>
                 <h3 className="text-xs font-semibold uppercase tracking-widest text-slate-500 mb-4 px-2">Тапсырыстар тарихы</h3>
                 <div className="space-y-2">
-                  {userData?.orders?.map((order: any) => (
-                    <Card key={order.id} className="flex justify-between items-center py-3">
-                      <div>
-                        <p className="font-semibold text-sm">{order.product_type}</p>
-                        <p className="text-[10px] text-slate-500">{new Date(order.created_at).toLocaleDateString()}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="font-mono text-sm text-blue-400">{order.amount_kzt} ₸</p>
-                        <p className={cn("text-[10px] uppercase font-bold", 
-                          order.status === 'completed' ? "text-green-400" : "text-yellow-400")}>
-                          {order.status}
-                        </p>
-                      </div>
-                    </Card>
-                  ))}
+                  {userData?.orders?.map((order: any) => {
+                    const isNftRental = ['gifts', 'usernames', 'numbers', 'nft'].includes(order.product_type);
+                    const isExpanded = expandedOrderId === order.id;
+
+                    return (
+                      <Card 
+                        key={order.id} 
+                        className={cn(
+                          "flex flex-col py-3 cursor-pointer transition-all duration-200",
+                          isExpanded ? "bg-slate-800/50" : "hover:bg-slate-800/30"
+                        )}
+                        onClick={() => setExpandedOrderId(isExpanded ? null : order.id)}
+                      >
+                        <div className="flex justify-between items-center w-full">
+                          <div>
+                            <p className="font-semibold text-sm">{order.product_type}</p>
+                            <p className="text-[10px] text-slate-500">{new Date(order.created_at).toLocaleDateString()}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="font-mono text-sm text-blue-400">{order.amount_kzt} ₸</p>
+                            <p className={cn("text-[10px] uppercase font-bold", 
+                              order.status === 'completed' ? "text-green-400" : 
+                              (order.status === 'pending' || order.status === 'processing') ? "text-yellow-400" : 
+                              (order.status === 'failed' || order.status === 'cancelled' || order.status === 'rejected') ? "text-red-400" : 
+                              "text-slate-400")}>
+                              {order.status}
+                            </p>
+                          </div>
+                        </div>
+
+                        {isExpanded && (
+                          <motion.div 
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: 'auto', opacity: 1 }}
+                            className="mt-3 pt-3 border-t border-slate-700 w-full overflow-hidden"
+                          >
+                            <div className="space-y-2 text-xs">
+                              {isNftRental ? (
+                                <>
+                                  <div className="flex justify-between">
+                                    <span className="text-slate-500">Тауар атауы:</span>
+                                    <span className="text-slate-200 font-medium">{order.product_name || 'NFT'}</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span className="text-slate-500">Сипаттама:</span>
+                                    <span className="text-slate-200 text-right max-w-[150px]">{order.description}</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span className="text-slate-500">TON Connect:</span>
+                                    <span className={cn(
+                                      "font-bold",
+                                      order.ton_connected ? "text-green-400" : "text-yellow-400"
+                                    )}>
+                                      {order.ton_connected ? "Қосылған / Подключен" : "Қосылмаған / Не подключен"}
+                                    </span>
+                                  </div>
+                                </>
+                              ) : (
+                                <div className="flex justify-between">
+                                  <span className="text-slate-500">Сипаттама:</span>
+                                  <span className="text-slate-200">{order.description || 'Мәлімет жоқ'}</span>
+                                </div>
+                              )}
+                              <div className="flex justify-between">
+                                <span className="text-slate-500">ID:</span>
+                                <span className="text-slate-400 font-mono">{order.order_id_api || order.id}</span>
+                              </div>
+                            </div>
+                          </motion.div>
+                        )}
+                      </Card>
+                    );
+                  })}
                   {(!userData?.orders || userData.orders.length === 0) && (
                     <p className="text-center text-slate-500 py-8 text-sm italic">Тапсырыстар әлі жоқ</p>
                   )}
@@ -316,7 +378,10 @@ export default function App() {
                       <div className="text-right">
                         <p className="font-mono text-sm text-blue-400">{order.amount_kzt} ₸</p>
                         <p className={cn("text-[10px] uppercase font-bold", 
-                          order.status === 'completed' ? "text-green-400" : "text-yellow-400")}>
+                          order.status === 'completed' ? "text-green-400" : 
+                          (order.status === 'pending' || order.status === 'processing') ? "text-yellow-400" : 
+                          (order.status === 'failed' || order.status === 'cancelled' || order.status === 'rejected') ? "text-red-400" : 
+                          "text-slate-400")}>
                           {order.status}
                         </p>
                       </div>

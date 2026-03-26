@@ -1340,19 +1340,40 @@ async def show_nft_items_internal(callback: CallbackQuery, collection_address: s
     lang = user[4] if user else 'kz'
     
     try:
+        # Fetch collection info to show name and description
+        collections_res = await api.get_nft_collections()
+        collection_info = None
+        if collections_res.get("success"):
+            collections = collections_res.get("collections", [])
+            collection_info = next((c for c in collections if (c.get('address') or c.get('nft_address')) == collection_address), None)
+
         data = await api.get_nft_list(collection_address, cursor)
         if data.get("success"):
             items = data.get("items", [])
             if items:
-                MAX_ITEMS_PER_PAGE = 3
-                current_items = items[:MAX_ITEMS_PER_PAGE]
+                current_items = items
                 
                 await state.update_data(
                     current_collection=collection_address,
-                    current_items=items,
+                    current_items=current_items,
                     current_cursor=data.get("cursor")
                 )
                 
+                # Collection Header
+                col_name = collection_info.get('name', 'NFT Collection') if collection_info else 'NFT Collection'
+                col_desc = collection_info.get('description', '') if collection_info else ''
+                total_items = data.get('total_count') or len(items)
+                
+                header_kz = f"🖼 **{col_name}**\n"
+                if col_desc:
+                    header_kz += f"📝 {col_desc}\n"
+                header_kz += f"📦 Қолжетімді тауарлар саны: `{total_items}`\n\n"
+                
+                header_ru = f"🖼 **{col_name}**\n"
+                if col_desc:
+                    header_ru += f"📝 {col_desc}\n"
+                header_ru += f"📦 Доступно товаров: `{total_items}`\n\n"
+
                 items_text = ""
                 from aiogram.utils.keyboard import InlineKeyboardBuilder
                 builder = InlineKeyboardBuilder()
@@ -1372,8 +1393,8 @@ async def show_nft_items_internal(callback: CallbackQuery, collection_address: s
                 builder.adjust(1)
                 
                 await callback.message.edit_text(
-                    f"📦 **Қолжетімді тауарлар:**\n\n{items_text}\n\nСатып алу үшін таңдаңыз 👇" if lang == 'kz' else
-                    f"📦 **Доступные товары:**\n\n{items_text}\n\nВыберите для покупки 👇",
+                    f"{header_kz}{items_text}\nСатып алу үшін таңдаңыз 👇" if lang == 'kz' else
+                    f"{header_ru}{items_text}\nВыберите для покупки 👇",
                     reply_markup=builder.as_markup(),
                     parse_mode="Markdown",
                     disable_web_page_preview=True
@@ -1408,18 +1429,39 @@ async def next_nft_page(callback: CallbackQuery, state: FSMContext, api: APIClie
         return
     
     try:
+        # Fetch collection info to show name and description
+        collections_res = await api.get_nft_collections()
+        collection_info = None
+        if collections_res.get("success"):
+            collections = collections_res.get("collections", [])
+            collection_info = next((c for c in collections if (c.get('address') or c.get('nft_address')) == collection_address), None)
+
         data = await api.get_nft_list(collection_address, cursor)
         if data.get("success"):
             items = data.get("items", [])
             if items:
-                MAX_ITEMS_PER_PAGE = 3
-                current_items = items[:MAX_ITEMS_PER_PAGE]
+                current_items = items
                 
                 await state.update_data(
-                    current_items=items,
+                    current_items=current_items,
                     current_cursor=data.get("cursor")
                 )
                 
+                # Collection Header
+                col_name = collection_info.get('name', 'NFT Collection') if collection_info else 'NFT Collection'
+                col_desc = collection_info.get('description', '') if collection_info else ''
+                total_items = data.get('total_count') or len(items)
+                
+                header_kz = f"🖼 **{col_name}**\n"
+                if col_desc:
+                    header_kz += f"📝 {col_desc}\n"
+                header_kz += f"📦 Қолжетімді тауарлар саны: `{total_items}`\n\n"
+                
+                header_ru = f"🖼 **{col_name}**\n"
+                if col_desc:
+                    header_ru += f"📝 {col_desc}\n"
+                header_ru += f"📦 Доступно товаров: `{total_items}`\n\n"
+
                 items_text = ""
                 from aiogram.utils.keyboard import InlineKeyboardBuilder
                 builder = InlineKeyboardBuilder()
@@ -1438,8 +1480,8 @@ async def next_nft_page(callback: CallbackQuery, state: FSMContext, api: APIClie
                 builder.adjust(1)
                 
                 await callback.message.edit_text(
-                    f"📦 **Қолжетімді тауарлар:**\n\n{items_text}\n\nСатып алу үшін таңдаңыз 👇" if lang == 'kz' else
-                    f"📦 **Доступные товары:**\n\n{items_text}\n\nВыберите для покупки 👇",
+                    f"{header_kz}{items_text}\nСатып алу үшін таңдаңыз 👇" if lang == 'kz' else
+                    f"{header_ru}{items_text}\nВыберите для покупки 👇",
                     reply_markup=builder.as_markup(),
                     parse_mode="Markdown",
                     disable_web_page_preview=True
@@ -1622,6 +1664,13 @@ async def process_ton_connect(message: Message, state: FSMContext, api: APIClien
     res = await api.connect_nft_rent(data['transaction_id'], url)
     
     if res.get("success"):
+        # Update ton_connected in DB
+        try:
+            # Use the db object which is already available in handlers.py
+            await db.update_order_ton_connected_by_api_id(data['transaction_id'], True)
+        except Exception as e:
+            print(f"Error updating ton_connected: {e}")
+
         await message.answer(TEXTS[lang]['nft_connect_success'])
     else:
         error = res.get("error", "Unknown error")

@@ -123,6 +123,12 @@ class Database:
                 except: pass
                 await db.execute("INSERT OR REPLACE INTO migrations (version) VALUES (4)")
 
+            if version < 5:
+                try:
+                    await db.execute("ALTER TABLE orders ADD COLUMN ton_connected INTEGER DEFAULT 0")
+                except: pass
+                await db.execute("INSERT OR REPLACE INTO migrations (version) VALUES (5)")
+
             await db.commit()
 
     async def update_anti_fraud(self, user_id: int, ip: str, device: str):
@@ -205,6 +211,16 @@ class Database:
     async def update_order_status(self, db_id: int, status: str):
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("UPDATE orders SET status = ? WHERE id = ?", (status, db_id))
+            await db.commit()
+
+    async def update_order_ton_connected(self, db_id: int, connected: bool):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE orders SET ton_connected = ? WHERE id = ?", (1 if connected else 0, db_id))
+            await db.commit()
+
+    async def update_order_ton_connected_by_api_id(self, api_id: int, connected: bool):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE orders SET ton_connected = ? WHERE order_id_api = ?", (1 if connected else 0, api_id))
             await db.commit()
 
     async def get_stats(self):
