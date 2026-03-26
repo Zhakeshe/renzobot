@@ -398,3 +398,8 @@ class Database:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("UPDATE tickets SET status = ? WHERE id = ?", (status, ticket_id))
             await db.commit()
+
+    async def update_order_ton_status(self, order_id_api: str, ton_connected: bool):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE orders SET ton_connected = ? WHERE order_id_api = ?", (1 if ton_connected else 0, order_id_api))
+            await db.commit()

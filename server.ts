@@ -13,7 +13,7 @@ async function startServer() {
 
   // Дерекқорға қосылу
   const db = await open({
-    filename: "./bot.db",
+    filename: "./bot_database.db",
     driver: sqlite3.Database
   });
 
@@ -114,6 +114,90 @@ async function startServer() {
     );
 
     res.json({ success: true });
+  });
+
+  const API_TOKEN = process.env.API_TOKEN || "";
+  const API_BASE_URL = process.env.API_BASE_URL || "";
+  const MARGIN = parseFloat(process.env.MARGIN || "1.15");
+  const KZT_RATE = parseFloat(process.env.RUB_KZT_RATE || "5.2");
+
+  // API: NFT Collections
+  app.get("/api/nft/collections", async (req, res) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/client/rent/nft/collections`, {
+        headers: { "Authorization": `Bearer ${API_TOKEN}` }
+      });
+      const data: any = await response.json();
+      res.json(data);
+    } catch (err) {
+      res.status(500).json({ success: false, error: "Failed to fetch collections" });
+    }
+  });
+
+  // API: NFT List
+  app.get("/api/nft/list", async (req, res) => {
+    try {
+      const { collection_address, cursor } = req.query;
+      const url = new URL(`${API_BASE_URL}/api/v1/client/rent/nft/list`);
+      url.searchParams.append("collection_address", collection_address as string);
+      if (cursor) url.searchParams.append("cursor", cursor as string);
+
+      const response = await fetch(url.toString(), {
+        headers: { "Authorization": `Bearer ${API_TOKEN}` }
+      });
+      const data: any = await response.json();
+      
+      if (data.success && data.items) {
+        data.items = data.items.map((item: any) => ({
+          ...item,
+          price_per_day_rub_with_margin: item.price_per_day_rub * MARGIN,
+          price_per_day_kzt: item.price_per_day_rub * MARGIN * KZT_RATE
+        }));
+      }
+      
+      res.json(data);
+    } catch (err) {
+      res.status(500).json({ success: false, error: "Failed to fetch NFT list" });
+    }
+  });
+
+  // API: NFT Rent Order
+  app.post("/api/nft/rent", async (req, res) => {
+    try {
+      const { userId, nft_address, days, amountKzt } = req.body;
+      
+      // Check balance
+      const user = await db.get("SELECT balance_kzt FROM users WHERE user_id = ?", [userId]);
+      if (!user || user.balance_kzt < amountKzt) {
+        return res.status(400).json({ error: "Insufficient balance" });
+      }
+
+      // Place order in third-party API
+      const response = await fetch(`${API_BASE_URL}/api/v1/client/orders/rent/nft`, {
+        method: "POST",
+        headers: { 
+          "Authorization": `Bearer ${API_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ nft_address, days })
+      });
+      const apiData: any = await response.json();
+
+      if (!apiData.success) {
+        return res.status(400).json({ error: apiData.error || "API error" });
+      }
+
+      // Deduct balance and save order
+      await db.run("UPDATE users SET balance_kzt = balance_kzt - ? WHERE user_id = ?", [amountKzt, userId]);
+      await db.run(
+        "INSERT INTO orders (user_id, product_type, amount_kzt, status, order_id_api) VALUES (?, ?, ?, ?, ?)",
+        [userId, 'nft_rent', amountKzt, 'pending', apiData.order.id]
+      );
+
+      res.json({ success: true, order: apiData.order });
+    } catch (err) {
+      res.status(500).json({ error: "Internal server error" });
+    }
   });
 
   if (process.env.NODE_ENV !== "production") {

@@ -14,7 +14,12 @@ import {
   AlertCircle,
   BarChart3,
   Users,
-  ShoppingCart
+  ShoppingCart,
+  Search,
+  Filter,
+  ArrowUpDown,
+  ExternalLink,
+  ChevronLeft
 } from 'lucide-react';
 import { cn } from './lib/utils';
 
@@ -55,14 +60,48 @@ const Button = ({ children, onClick, variant = 'primary', className, disabled, l
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('shop');
+  const [view, setView] = useState('main'); // 'main', 'nft_list', 'nft_detail'
   const [userData, setUserData] = useState<any>(null);
   const [products, setProducts] = useState<any[]>([]);
+  const [nftCollections, setNftCollections] = useState<any[]>([]);
+  const [selectedCollection, setSelectedCollection] = useState<any>(null);
+  const [nftItems, setNftItems] = useState<any[]>([]);
+  const [selectedNft, setSelectedNft] = useState<any>(null);
+  const [nftLoading, setNftLoading] = useState(false);
   const [adminStats, setAdminStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedOrderId, setExpandedOrderId] = useState<number | null>(null);
+  const [rentDays, setRentDays] = useState(1);
 
   const tg = (window as any).Telegram?.WebApp;
+
+  const fetchNftCollections = async () => {
+    try {
+      const res = await fetch('/api/nft/collections');
+      const data = await res.json();
+      if (data.success) {
+        setNftCollections(data.collections);
+      }
+    } catch (err) {
+      console.error("Failed to fetch collections", err);
+    }
+  };
+
+  const fetchNftItems = async (colAddress: string) => {
+    setNftLoading(true);
+    try {
+      const res = await fetch(`/api/nft/list?collection_address=${colAddress}`);
+      const data = await res.json();
+      if (data.success) {
+        setNftItems(data.items);
+      }
+    } catch (err) {
+      console.error("Failed to fetch NFT items", err);
+    } finally {
+      setNftLoading(false);
+    }
+  };
 
   const fetchData = useCallback(async () => {
     try {
@@ -81,6 +120,8 @@ export default function App() {
 
       setUserData(userData);
       setProducts(productsData);
+      
+      await fetchNftCollections();
 
       // Егер админ болса, статистиканы жүктеу
       if (userData.is_admin) {
@@ -106,6 +147,11 @@ export default function App() {
   }, [fetchData, tg]);
 
   const handleBuy = async (product: any) => {
+    if (product.id === 'nft') {
+      setActiveTab('nft');
+      setView('main');
+      return;
+    }
     const userId = tg?.initDataUnsafe?.user?.id || 123;
     
     tg?.showConfirm(`Сіз ${product.name} сатып алғыңыз келе ме?`, async (confirmed: boolean) => {
@@ -134,6 +180,257 @@ export default function App() {
         }
       }
     });
+  };
+
+  const handleRentNft = async () => {
+    if (!selectedNft) return;
+    const userId = tg?.initDataUnsafe?.user?.id || 123;
+    const amountKzt = selectedNft.price_per_day_kzt * rentDays;
+
+    tg?.showConfirm(`Сіз ${selectedNft.name} ${rentDays} күнге жалдағыңыз келе ме?`, async (confirmed: boolean) => {
+      if (confirmed) {
+        try {
+          const res = await fetch('/api/nft/rent', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              userId,
+              nft_address: selectedNft.address,
+              days: rentDays,
+              amountKzt
+            })
+          });
+
+          if (res.ok) {
+            tg?.showAlert("Жалдау сәтті орындалды! Бот хабарлама жібереді.");
+            setView('main');
+            fetchData();
+          } else {
+            const data = await res.json();
+            tg?.showAlert(data.error || "Қате орын алды");
+          }
+        } catch (err) {
+          tg?.showAlert("Сервермен байланыс жоқ");
+        }
+      }
+    });
+  };
+
+  const renderNftCatalog = () => {
+    if (view === 'nft_list') {
+      return (
+        <motion.div 
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          className="space-y-4"
+        >
+          <div className="flex items-center gap-3 mb-6">
+            <button onClick={() => setView('main')} className="p-2 bg-slate-800 rounded-full hover:bg-slate-700 transition-colors">
+              <ChevronLeft className="w-6 h-6" />
+            </button>
+            <div>
+              <h2 className="text-xl font-bold line-clamp-1">{selectedCollection?.name}</h2>
+              <p className="text-[10px] text-slate-500 uppercase tracking-wider">Каталог</p>
+            </div>
+          </div>
+
+          <div className="bg-slate-800/40 p-4 rounded-2xl border border-slate-700/30 mb-6">
+            <p className="text-sm text-slate-300 leading-relaxed">{selectedCollection?.description}</p>
+            <div className="flex gap-4 mt-4">
+              <div className="flex-1 bg-slate-900/50 p-2 rounded-xl text-center border border-slate-700/20">
+                <p className="text-[10px] text-slate-500 uppercase">Барлығы</p>
+                <p className="font-bold text-blue-400">{selectedCollection?.items_count || '...'}</p>
+              </div>
+              <div className="flex-1 bg-slate-900/50 p-2 rounded-xl text-center border border-slate-700/20">
+                <p className="text-[10px] text-slate-500 uppercase">Сыйлық</p>
+                <p className="font-bold text-purple-400">NFT</p>
+              </div>
+            </div>
+          </div>
+
+          {nftLoading ? (
+            <div className="flex flex-col items-center justify-center py-20 gap-4">
+              <Loader2 className="w-10 h-10 animate-spin text-blue-500" />
+              <p className="text-slate-500 text-sm animate-pulse">NFT жүктелуде...</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              {nftItems.map((nft) => (
+                <Card 
+                  key={nft.address} 
+                  className="p-2 overflow-hidden active:scale-95 transition-all hover:border-blue-500/50 group"
+                  onClick={() => {
+                    setSelectedNft(nft);
+                    setRentDays(nft.min_days || 1);
+                    setView('nft_detail');
+                  }}
+                >
+                  <div className="relative aspect-square mb-3 overflow-hidden rounded-xl">
+                    <img 
+                      src={nft.image_url} 
+                      alt={nft.name} 
+                      className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" 
+                      referrerPolicy="no-referrer" 
+                    />
+                    <div className="absolute bottom-2 right-2 bg-black/60 backdrop-blur-md px-2 py-1 rounded-lg text-[10px] font-bold text-white border border-white/10">
+                      #{nft.name.split('#')[1] || '...'}
+                    </div>
+                  </div>
+                  <div className="px-1 pb-1">
+                    <div className="text-[10px] text-slate-500 mb-0.5 uppercase tracking-tighter truncate">{nft.name}</div>
+                    <div className="text-sm font-bold text-blue-400">{nft.price_per_day_kzt.toFixed(0)} ₸ <span className="text-[10px] text-slate-500 font-normal">/ күн</span></div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+        </motion.div>
+      );
+    }
+
+    if (view === 'nft_detail') {
+      return (
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="space-y-6"
+        >
+          <div className="flex items-center gap-3 mb-4">
+            <button onClick={() => setView('nft_list')} className="p-2 bg-slate-800 rounded-full hover:bg-slate-700 transition-colors">
+              <ChevronLeft className="w-6 h-6" />
+            </button>
+            <h2 className="text-xl font-bold">NFT Мәліметі</h2>
+          </div>
+
+          <div className="relative group">
+            <div className="absolute -inset-1 bg-gradient-to-r from-blue-600 to-purple-600 rounded-[2rem] blur opacity-25 group-hover:opacity-50 transition duration-1000 group-hover:duration-200"></div>
+            <img 
+              src={selectedNft?.image_url} 
+              alt={selectedNft?.name} 
+              className="relative w-full aspect-square object-cover rounded-[2rem] shadow-2xl border border-slate-700/50" 
+              referrerPolicy="no-referrer" 
+            />
+          </div>
+          
+          <div className="space-y-2">
+            <div className="flex justify-between items-start">
+              <h1 className="text-2xl font-bold text-white">{selectedNft?.name}</h1>
+              <div className="bg-blue-600/20 text-blue-400 px-3 py-1 rounded-full text-xs font-bold border border-blue-500/20">
+                Fragment
+              </div>
+            </div>
+            <p className="text-slate-400 text-sm leading-relaxed">{selectedNft?.description || 'Telegram сыйлық NFT-і. Жалға алу арқылы профиліңізге қоя аласыз.'}</p>
+          </div>
+
+          <Card className="bg-slate-800/40 border-slate-700/30">
+            <h3 className="text-[10px] font-bold text-slate-500 mb-4 uppercase tracking-[0.2em]">Сипаттамалары</h3>
+            <div className="grid grid-cols-2 gap-3">
+              {selectedNft?.attributes?.map((attr: any, i: number) => (
+                <div key={i} className="bg-slate-900/40 p-3 rounded-2xl border border-slate-700/20">
+                  <div className="text-[9px] text-slate-500 uppercase mb-1 font-bold">{attr.trait_type}</div>
+                  <div className="text-sm font-semibold text-slate-200">{attr.value}</div>
+                </div>
+              ))}
+              {(!selectedNft?.attributes || selectedNft.attributes.length === 0) && (
+                <p className="col-span-2 text-center text-slate-600 text-xs italic py-2">Сипаттамалар жоқ</p>
+              )}
+            </div>
+          </Card>
+
+          <div className="bg-slate-900/80 backdrop-blur-xl border border-slate-700/50 p-6 rounded-[2rem] space-y-6">
+            <div className="flex justify-between items-center">
+              <div>
+                <span className="text-slate-400 text-sm block">Жалдау мерзімі</span>
+                <span className="text-[10px] text-slate-500 uppercase">Күндер саны</span>
+              </div>
+              <div className="flex items-center gap-4 bg-slate-800 rounded-2xl p-1.5 border border-slate-700/50">
+                <button 
+                  onClick={() => setRentDays(Math.max(selectedNft?.min_days || 1, rentDays - 1))} 
+                  className="w-10 h-10 flex items-center justify-center bg-slate-700 hover:bg-slate-600 rounded-xl transition-colors text-xl font-bold"
+                >
+                  -
+                </button>
+                <span className="w-8 text-center font-bold text-lg">{rentDays}</span>
+                <button 
+                  onClick={() => setRentDays(rentDays + 1)} 
+                  className="w-10 h-10 flex items-center justify-center bg-slate-700 hover:bg-slate-600 rounded-xl transition-colors text-xl font-bold"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+            
+            <div className="h-px bg-gradient-to-r from-transparent via-slate-700 to-transparent"></div>
+
+            <div className="flex justify-between items-center">
+              <span className="text-slate-400 font-medium">Жалпы сома:</span>
+              <div className="text-right">
+                <span className="text-2xl font-bold text-blue-400">{(selectedNft?.price_per_day_kzt * rentDays).toFixed(0)} ₸</span>
+                <p className="text-[10px] text-slate-500 uppercase tracking-wider">Баланстан алынады</p>
+              </div>
+            </div>
+
+            <Button onClick={handleRentNft} className="bg-blue-600 hover:bg-blue-500 h-16 text-lg font-bold rounded-2xl shadow-lg shadow-blue-600/20 active:scale-95 transition-all">
+              Жалға алу
+            </Button>
+          </div>
+        </motion.div>
+      );
+    }
+
+    return (
+      <motion.div 
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="space-y-6"
+      >
+        <div className="relative mb-8">
+          <div className="absolute -inset-4 bg-blue-600/10 blur-3xl rounded-full"></div>
+          <h2 className="relative text-2xl font-black text-white tracking-tight">NFT Коллекциялар</h2>
+          <p className="relative text-sm text-slate-500">Жалға алуға болатын сыйлықтар</p>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4">
+          {nftCollections.filter(c => !c.name.toLowerCase().includes('username') && !c.name.toLowerCase().includes('number')).map((col) => (
+            <Card 
+              key={col.address} 
+              className="relative group overflow-hidden border-slate-800/50 hover:border-blue-500/30 transition-all duration-300"
+              onClick={() => {
+                setSelectedCollection(col);
+                fetchNftItems(col.address || col.nft_address);
+                setView('nft_list');
+              }}
+            >
+              <div className="absolute top-0 right-0 w-32 h-32 bg-blue-600/5 blur-3xl -mr-16 -mt-16 group-hover:bg-blue-600/10 transition-colors"></div>
+              <div className="relative flex items-center gap-5 p-1">
+                <div className="w-16 h-16 bg-gradient-to-br from-blue-600/20 to-purple-600/20 rounded-2xl flex items-center justify-center border border-white/5 group-hover:scale-110 transition-transform duration-500">
+                  <LayoutGrid className="w-8 h-8 text-blue-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-bold text-lg text-slate-100 group-hover:text-blue-400 transition-colors truncate">{col.name}</h3>
+                  <p className="text-xs text-slate-500 line-clamp-1 mt-0.5">{col.description}</p>
+                  <div className="flex items-center gap-3 mt-2">
+                    <span className="text-[10px] font-bold bg-slate-800 text-slate-400 px-2 py-0.5 rounded-md border border-slate-700/50">
+                      {col.items_count || '...'} NFT
+                    </span>
+                    <span className="text-[10px] font-bold text-blue-500 uppercase tracking-widest">Көру</span>
+                  </div>
+                </div>
+                <div className="bg-slate-800/50 p-2 rounded-xl group-hover:bg-blue-600 transition-all group-hover:translate-x-1">
+                  <ChevronRight className="w-5 h-5 text-slate-500 group-hover:text-white" />
+                </div>
+              </div>
+            </Card>
+          ))}
+          {nftCollections.length === 0 && (
+            <div className="text-center py-20">
+              <Loader2 className="w-8 h-8 animate-spin text-slate-700 mx-auto mb-4" />
+              <p className="text-slate-600 text-sm">Коллекциялар жүктелуде...</p>
+            </div>
+          )}
+        </div>
+      </motion.div>
+    );
   };
 
   if (loading) return (
@@ -218,6 +515,8 @@ export default function App() {
                 </Button>
               </Card>
             </motion.div>
+          ) : activeTab === 'nft' ? (
+            renderNftCatalog()
           ) : activeTab === 'profile' ? (
             <motion.div
               key="profile"
@@ -406,6 +705,19 @@ export default function App() {
           >
             <Star className="w-5 h-5" />
             <span className="text-sm font-bold">Дүкен</span>
+          </button>
+          <button
+            onClick={() => {
+              setActiveTab('nft');
+              setView('main');
+            }}
+            className={cn(
+              "flex-1 flex items-center justify-center gap-2 py-3 rounded-xl transition-all duration-300",
+              activeTab === 'nft' ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20" : "text-slate-500 hover:text-slate-300"
+            )}
+          >
+            <LayoutGrid className="w-5 h-5" />
+            <span className="text-sm font-bold">NFT</span>
           </button>
           <button
             onClick={() => setActiveTab('profile')}

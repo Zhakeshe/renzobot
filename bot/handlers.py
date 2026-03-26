@@ -1,7 +1,7 @@
 from aiogram import Router, F
 import random
 from aiogram.filters import CommandStart, CommandObject
-from aiogram.types import Message, CallbackQuery, LabeledPrice, PreCheckoutQuery
+from aiogram.types import Message, CallbackQuery, LabeledPrice, PreCheckoutQuery, InlineKeyboardButton, WebAppInfo
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from database import Database
@@ -31,6 +31,7 @@ class NFTState(StatesGroup):
     waiting_for_days = State()
     waiting_for_address = State()
     waiting_for_ton_connect = State()
+    waiting_for_search = State()
 
 class AdminState(StatesGroup):
     waiting_for_balance = State()
@@ -1270,9 +1271,89 @@ async def back_to_main(callback: CallbackQuery):
     )
     await callback.answer()
 
-@router.callback_query(F.data.startswith("nft_cat_"))
+@router.callback_query(F.data == "nft_search_col")
+async def start_nft_search_col(callback: CallbackQuery, state: FSMContext):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    
+    await callback.message.answer("🔍 Іздеу үшін коллекция атауын жазыңыз:" if lang == 'kz' else "🔍 Введите название коллекции для поиска:")
+    await state.set_state(NFTState.waiting_for_search)
+    await callback.answer()
+
+@router.message(NFTState.waiting_for_search)
+async def process_nft_search_col(message: Message, state: FSMContext, api: APIClient):
+    query = message.text.strip()
+    await state.update_data(col_search_query=query)
+    await state.set_state(None)
+    
+    # Create a dummy callback query to trigger show_nft_category
+    from aiogram.types import User, Chat
+    dummy_callback = CallbackQuery(
+        id="0",
+        from_user=message.from_user,
+        chat_instance="0",
+        message=message,
+        data="nft_cat_gifts_0"
+    )
+    await show_nft_category(dummy_callback, api, state)
+
+@router.callback_query(F.data == "nft_cat_gifts_0_reset")
+async def reset_nft_search_col(callback: CallbackQuery, state: FSMContext, api: APIClient):
+    await state.update_data(col_search_query=None)
+    await show_nft_category(callback, api, state)
+
+@router.callback_query(F.data.startswith("cn_"))
+async def start_ton_connect(callback: CallbackQuery, state: FSMContext):
+    order_id = callback.data.split("_")[1]
+    lang = await db.get_user_lang(callback.from_user.id)
+    
+    await callback.message.answer(
+        "🔗 TON Connect сілтемесін жіберіңіз / Отправьте ссылку TON Connect:" if lang == 'kz' else
+        "🔗 Отправьте ссылку TON Connect:"
+    )
+    await state.update_data(order_id=order_id)
+    await state.set_state(NFTState.waiting_for_ton_connect)
+    await callback.answer()
+
+@router.message(NFTState.waiting_for_ton_connect)
+async def process_ton_connect(message: Message, state: FSMContext, api: APIClient):
+    data = await state.get_data()
+    order_id = data.get("order_id")
+    ton_url = message.text
+    lang = await db.get_user_lang(message.from_user.id)
+    
+    if not ton_url.startswith("https://"):
+        await message.answer(
+            "❌ Қате сілтеме! / Неверная ссылка!" if lang == 'kz' else
+            "❌ Неверная ссылка!"
+        )
+        return
+        
+    # Call API to connect
+    res = await api.connect_nft_rent(order_id, ton_url)
+    
+    if res.get("success"):
+        # Update DB status
+        await db.update_order_ton_status(order_id, True)
+        await message.answer(
+            "✅ TON Connect сәтті қосылды! / TON Connect успешно подключен!" if lang == 'kz' else
+            "✅ TON Connect успешно подключен!"
+        )
+    else:
+        await message.answer(
+            f"❌ Қате: {res.get('error')} / Ошибка: {res.get('error')}"
+        )
+    
+    await state.clear()
+
+@router.callback_query(F.data == "noop")
+async def noop_callback(callback: CallbackQuery):
+    await callback.answer()
 async def show_nft_category(callback: CallbackQuery, api: APIClient, state: FSMContext):
-    category = callback.data.split("_")[2]
+    parts = callback.data.split("_")
+    category = parts[2]
+    page = int(parts[3]) if len(parts) > 3 else 0
+    
     await state.update_data(category=category)
     user = await db.get_user(callback.from_user.id)
     lang = user[4] if user else 'kz'
@@ -1280,7 +1361,7 @@ async def show_nft_category(callback: CallbackQuery, api: APIClient, state: FSMC
     try:
         collections_res = await api.get_nft_collections()
         if not collections_res.get("success"):
-            await callback.answer("❌ Қате орын алды.")
+            await callback.answer("❌ Қате орын алды." if lang == 'kz' else "❌ Произошла ошибка.")
             return
             
         collections = collections_res.get("collections", [])
@@ -1289,23 +1370,67 @@ async def show_nft_category(callback: CallbackQuery, api: APIClient, state: FSMC
             # Show collections that are NOT usernames or numbers
             gift_collections = [c for c in collections if "username" not in c['name'].lower() and "number" not in c['name'].lower()]
             
+            # Filter by search if exists
+            state_data = await state.get_data()
+            search_query = state_data.get("col_search_query")
+            if search_query:
+                gift_collections = [c for c in gift_collections if search_query.lower() in c['name'].lower()]
+
             from aiogram.utils.keyboard import InlineKeyboardBuilder
             builder = InlineKeyboardBuilder()
             
-            for col in gift_collections[:10]: # Limit to 10
+            items_per_page = 10
+            start_idx = page * items_per_page
+            end_idx = start_idx + items_per_page
+            current_page_cols = gift_collections[start_idx:end_idx]
+            
+            for col in current_page_cols:
                 col_name = col['name']
                 col_address = col.get('address') or col.get('nft_address')
                 if not col_address:
                     continue
-                if len(col_name) > 15:
-                    col_name = col_name[:12] + "..."
-                builder.button(text=f"🖼 {col_name}", callback_data=f"nc_{col_address}")
+                if len(col_name) > 25:
+                    col_name = col_name[:22] + "..."
+                builder.button(text=f"{col_name}", callback_data=f"nc_{col_address}")
             
-            builder.button(text="‹ Артқа / Назад", callback_data="rent_nft")
             builder.adjust(1)
             
+            # Pagination buttons
+            nav_buttons = []
+            total_pages = (len(gift_collections) + items_per_page - 1) // items_per_page
+            if total_pages > 1:
+                if page > 0:
+                    nav_buttons.append(InlineKeyboardButton(text="«", callback_data=f"nft_cat_gifts_0"))
+                    nav_buttons.append(InlineKeyboardButton(text="‹", callback_data=f"nft_cat_gifts_{page-1}"))
+                
+                nav_buttons.append(InlineKeyboardButton(text=f"{page+1}/{total_pages}", callback_data="noop"))
+                
+                if page < total_pages - 1:
+                    nav_buttons.append(InlineKeyboardButton(text="›", callback_data=f"nft_cat_gifts_{page+1}"))
+                    nav_buttons.append(InlineKeyboardButton(text="»", callback_data=f"nft_cat_gifts_{total_pages-1}"))
+            
+            if nav_buttons:
+                builder.row(*nav_buttons)
+
+            # Search and Web Catalog buttons
+            builder.row(InlineKeyboardButton(text="🔍 Поиск по коллекции" if lang == 'kz' else "🔍 Поиск по коллекции", callback_data="nft_search_col"))
+            
+            app_url = os.getenv("APP_URL", "https://ais-dev-rtojpzn754reldc7yedx5e-747018559939.asia-southeast1.run.app")
+            from aiogram.types import WebAppInfo
+            builder.row(InlineKeyboardButton(text="🌐 Веб-каталог" if lang == 'kz' else "🌐 Веб-каталог", web_app=WebAppInfo(url=app_url)))
+            
+            builder.row(InlineKeyboardButton(text="‹ Артқа / Назад", callback_data="rent_nft"))
+            
+            text_kz = "🖼 **Жалға алуға болатын NFT-коллекциялар.**\n\nТөмендегі тізімнен таңдаңыз немесе толық мәлімет алу үшін веб-каталогты пайдаланыңыз 👇"
+            text_ru = "🖼 **Доступные NFT-коллекции для аренды.**\n\nВыберите коллекцию из списка ниже или воспользуйтесь веб-каталогом, чтобы посмотреть подробности 👇"
+            
+            if search_query:
+                text_kz += f"\n\n🔍 Іздеу: `{search_query}`"
+                text_ru += f"\n\n🔍 Поиск: `{search_query}`"
+                builder.row(InlineKeyboardButton(text="❌ Іздеуді тоқтату / Сбросить поиск", callback_data="nft_cat_gifts_0_reset"))
+
             await callback.message.edit_text(
-                "🎁 **NFT-подарки**\n\nКоллекцияны таңдаңыз:" if lang == 'kz' else "🎁 **NFT-подарки**\n\nВыберите коллекцию:",
+                text_kz if lang == 'kz' else text_ru,
                 reply_markup=builder.as_markup(),
                 parse_mode="Markdown"
             )
@@ -1360,30 +1485,42 @@ async def show_nft_items_internal(callback: CallbackQuery, collection_address: s
                 )
                 
                 # Collection Header
-                col_name = collection_info.get('name', 'NFT Collection') if collection_info else 'NFT Collection'
-                col_desc = collection_info.get('description', '') if collection_info else ''
-                total_items = data.get('total_count') or len(items)
+                header_text = ""
+                if collection_info:
+                    col_name = collection_info.get('name', 'Collection')
+                    col_desc = collection_info.get('description', '')
+                    total_count = data.get('total_count', 0)
+                    
+                    header_text = f"💎 **{col_name}**\n\n"
+                    if col_desc:
+                        header_text += f"{col_desc}\n\n"
+                    
+                    header_text += f"📊 Доступно для аренды: `{total_count}` шт.\n"
+                    
+                    # Add Fragment link
+                    if "rarebird" in col_name.lower():
+                        header_text += f"🔗 [Fragment](https://fragment.com/gifts/rarebird)\n"
+                    elif "username" in col_name.lower():
+                        header_text += f"🔗 [Fragment](https://fragment.com/usernames)\n"
+                    elif "number" in col_name.lower():
+                        header_text += f"🔗 [Fragment](https://fragment.com/numbers)\n"
                 
-                header_kz = f"🖼 **{col_name}**\n"
-                if col_desc:
-                    header_kz += f"📝 {col_desc}\n"
-                header_kz += f"📦 Қолжетімді тауарлар саны: `{total_items}`\n\n"
-                
-                header_ru = f"🖼 **{col_name}**\n"
-                if col_desc:
-                    header_ru += f"📝 {col_desc}\n"
-                header_ru += f"📦 Доступно товаров: `{total_items}`\n\n"
+                header_text += "\nВыберите NFT для просмотра деталей 👇"
 
-                items_text = ""
                 from aiogram.utils.keyboard import InlineKeyboardBuilder
                 builder = InlineKeyboardBuilder()
                 
                 for idx, item in enumerate(current_items):
-                    price_kzt = item["price_per_day_rub_with_margin"] * KZT_RATE
-                    link = get_nft_link(item['name'])
-                    day_text = "күн" if lang == 'kz' else "день"
-                    items_text += f"🔹 [{item['name']}]({link}) — `{price_kzt:.2f} ₸/{day_text}`\n"
-                    builder.button(text=f"🛒 {item['name'][:15]}", callback_data=f"ri_{idx}")
+                    price_rub = item["price_per_day_rub_with_margin"]
+                    price_kzt = price_rub * KZT_RATE
+                    min_days = item.get('min_days', 1)
+                    max_days = item.get('max_days', 180)
+                    
+                    if lang == 'kz':
+                        btn_text = f"{item['name']} - {price_kzt:.0f}₸ ({min_days}-{max_days}д)"
+                    else:
+                        btn_text = f"{item['name']} - {price_rub:.1f}₽ ({min_days}-{max_days}д)"
+                    builder.button(text=btn_text, callback_data=f"ri_{idx}")
                 
                 next_cursor = data.get("cursor")
                 if next_cursor:
@@ -1393,8 +1530,7 @@ async def show_nft_items_internal(callback: CallbackQuery, collection_address: s
                 builder.adjust(1)
                 
                 await callback.message.edit_text(
-                    f"{header_kz}{items_text}\nСатып алу үшін таңдаңыз 👇" if lang == 'kz' else
-                    f"{header_ru}{items_text}\nВыберите для покупки 👇",
+                    header_text,
                     reply_markup=builder.as_markup(),
                     parse_mode="Markdown",
                     disable_web_page_preview=True
@@ -1448,30 +1584,42 @@ async def next_nft_page(callback: CallbackQuery, state: FSMContext, api: APIClie
                 )
                 
                 # Collection Header
-                col_name = collection_info.get('name', 'NFT Collection') if collection_info else 'NFT Collection'
-                col_desc = collection_info.get('description', '') if collection_info else ''
-                total_items = data.get('total_count') or len(items)
+                header_text = ""
+                if collection_info:
+                    col_name = collection_info.get('name', 'Collection')
+                    col_desc = collection_info.get('description', '')
+                    total_count = data.get('total_count', 0)
+                    
+                    header_text = f"💎 **{col_name}**\n\n"
+                    if col_desc:
+                        header_text += f"{col_desc}\n\n"
+                    
+                    header_text += f"📊 Доступно для аренды: `{total_count}` шт.\n"
+                    
+                    # Add Fragment link
+                    if "rarebird" in col_name.lower():
+                        header_text += f"🔗 [Fragment](https://fragment.com/gifts/rarebird)\n"
+                    elif "username" in col_name.lower():
+                        header_text += f"🔗 [Fragment](https://fragment.com/usernames)\n"
+                    elif "number" in col_name.lower():
+                        header_text += f"🔗 [Fragment](https://fragment.com/numbers)\n"
                 
-                header_kz = f"🖼 **{col_name}**\n"
-                if col_desc:
-                    header_kz += f"📝 {col_desc}\n"
-                header_kz += f"📦 Қолжетімді тауарлар саны: `{total_items}`\n\n"
-                
-                header_ru = f"🖼 **{col_name}**\n"
-                if col_desc:
-                    header_ru += f"📝 {col_desc}\n"
-                header_ru += f"📦 Доступно товаров: `{total_items}`\n\n"
+                header_text += "\nВыберите NFT для просмотра деталей 👇"
 
-                items_text = ""
                 from aiogram.utils.keyboard import InlineKeyboardBuilder
                 builder = InlineKeyboardBuilder()
                 
                 for idx, item in enumerate(current_items):
-                    price_kzt = item["price_per_day_rub_with_margin"] * KZT_RATE
-                    link = get_nft_link(item['name'])
-                    day_text = "күн" if lang == 'kz' else "день"
-                    items_text += f"🔹 [{item['name']}]({link}) — `{price_kzt:.2f} ₸/{day_text}`\n"
-                    builder.button(text=f"🛒 {item['name'][:15]}", callback_data=f"ri_{idx}")
+                    price_rub = item["price_per_day_rub_with_margin"]
+                    price_kzt = price_rub * KZT_RATE
+                    min_days = item.get('min_days', 1)
+                    max_days = item.get('max_days', 180)
+                    
+                    if lang == 'kz':
+                        btn_text = f"{item['name']} - {price_kzt:.0f}₸ ({min_days}-{max_days}д)"
+                    else:
+                        btn_text = f"{item['name']} - {price_rub:.1f}₽ ({min_days}-{max_days}д)"
+                    builder.button(text=btn_text, callback_data=f"ri_{idx}")
                 
                 if data.get("cursor"):
                     builder.button(text="➡️ Келесі / Далее", callback_data="nft_next")
@@ -1480,8 +1628,7 @@ async def next_nft_page(callback: CallbackQuery, state: FSMContext, api: APIClie
                 builder.adjust(1)
                 
                 await callback.message.edit_text(
-                    f"{header_kz}{items_text}\nСатып алу үшін таңдаңыз 👇" if lang == 'kz' else
-                    f"{header_ru}{items_text}\nВыберите для покупки 👇",
+                    header_text,
                     reply_markup=builder.as_markup(),
                     parse_mode="Markdown",
                     disable_web_page_preview=True
@@ -1533,19 +1680,41 @@ async def start_nft_rent(callback: CallbackQuery, state: FSMContext, api: APICli
 
         await state.update_data(nft_address=nft_address, price_per_day=price_kzt, name=nft_name, min_days=min_days)
         
+        image_url = item.get("image_url")
+        attributes = item.get("attributes", [])
+        
+        attr_text = ""
+        if attributes:
+            attr_text = "\n\n**Характеристики:**\n" if lang == 'kz' else "\n\n**Характеристики:**\n"
+            for attr in attributes:
+                trait = attr.get('trait_type', '')
+                val = attr.get('value', '')
+                attr_text += f"• {trait}: `{val}`\n"
+
         from aiogram.utils.keyboard import InlineKeyboardBuilder
         builder = InlineKeyboardBuilder()
         builder.button(text="‹ Артқа / Назад", callback_data="rent_nft")
         
-        await callback.message.edit_text(
-            TEXTS[lang]['nft_rent_days'].format(
-                name=nft_name,
-                price=price_kzt,
-                min_days=min_days
-            ),
-            reply_markup=builder.as_markup(),
-            parse_mode="Markdown"
-        )
+        caption = TEXTS[lang]['nft_rent_days'].format(
+            name=nft_name,
+            price=price_kzt,
+            min_days=min_days
+        ) + attr_text
+        
+        if image_url:
+            await callback.message.answer_photo(
+                photo=image_url,
+                caption=caption,
+                reply_markup=builder.as_markup(),
+                parse_mode="Markdown"
+            )
+            await callback.message.delete()
+        else:
+            await callback.message.edit_text(
+                caption,
+                reply_markup=builder.as_markup(),
+                parse_mode="Markdown"
+            )
         await state.set_state(NFTState.waiting_for_days)
         await callback.answer()
     except Exception as e:
