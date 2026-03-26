@@ -79,6 +79,18 @@ class Database:
                 )
             """)
 
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS payment_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    amount REAL,
+                    method TEXT,
+                    receipt_file_id TEXT,
+                    status TEXT DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             # Миграция логикасы: жаңа бағандарды қосу
             cursor = await db.execute("SELECT version FROM migrations")
             row = await cursor.fetchone()
@@ -118,7 +130,57 @@ class Database:
                 count = (await c.fetchone())[0]
                 return count > 2 # Егер 2-ден көп болса, күдікті
 
-    async def get_all_users(self):
+    async def create_payment_request(self, user_id: int, amount: float, method: str, receipt_file_id: str = None):
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "INSERT INTO payment_requests (user_id, amount, method, receipt_file_id) VALUES (?, ?, ?, ?)",
+                (user_id, amount, method, receipt_file_id)
+            )
+            req_id = cursor.lastrowid
+            await db.commit()
+            return req_id
+
+    async def get_payment_request(self, req_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute("SELECT * FROM payment_requests WHERE id = ?", (req_id,)) as cursor:
+                return await cursor.fetchone()
+
+    async def update_payment_request_status(self, req_id: int, status: str):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE payment_requests SET status = ? WHERE id = ?", (status, req_id))
+            await db.commit()
+
+    async def get_top_referrers(self, limit: int = 10):
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute("""
+                SELECT referred_by, COUNT(*) as ref_count 
+                FROM users 
+                WHERE referred_by IS NOT NULL 
+                GROUP BY referred_by 
+                ORDER BY ref_count DESC 
+                LIMIT ?
+            """, (limit,)) as cursor:
+                return await cursor.fetchall()
+
+    async def get_user_by_id(self, user_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cursor:
+                return await cursor.fetchone()
+
+    async def get_today_stats(self):
+        async with aiosqlite.connect(self.db_path) as db:
+            # Бүгінгі жаңа пайдаланушылар
+            async with db.execute("SELECT COUNT(*) FROM users WHERE date(created_at) = date('now')") as c1:
+                new_users = (await c1.fetchone())[0]
+            # Бүгінгі сауда
+            async with db.execute("SELECT SUM(amount_kzt) FROM orders WHERE status = 'completed' AND date(created_at) = date('now')") as c2:
+                today_sales = (await c2.fetchone())[0] or 0.0
+            # Бүгінгі пайда
+            async with db.execute("SELECT SUM(profit_kzt) FROM orders WHERE status = 'completed' AND date(created_at) = date('now')") as c3:
+                today_profit = (await c3.fetchone())[0] or 0.0
+            return new_users, today_sales, today_profit
+
+    async def get_all_users_ids(self):
         async with aiosqlite.connect(self.db_path) as db:
             async with db.execute("SELECT user_id FROM users") as cursor:
                 return [row[0] for row in await cursor.fetchall()]

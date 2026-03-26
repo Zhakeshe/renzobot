@@ -41,6 +41,14 @@ class SupportState(StatesGroup):
     waiting_for_message = State()
     waiting_for_reply = State()
 
+class TONState(StatesGroup):
+    waiting_for_amount = State()
+    waiting_for_address = State()
+
+class SellStarsState(StatesGroup):
+    waiting_for_amount = State()
+    waiting_for_address = State()
+
 load_dotenv()
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
@@ -93,6 +101,17 @@ TEXTS = {
 @router.message(CommandStart())
 async def cmd_start(message: Message, command: CommandObject):
     user = await db.get_user(message.from_user.id)
+    # Anti-fraud check
+    ip = message.from_user.id # Placeholder for real IP if available via proxy
+    device = message.from_user.id # Placeholder for device ID
+    
+    is_fraud = await db.check_fraud(message.from_user.id, str(ip))
+    if is_fraud:
+        await message.answer("⚠️ Күдікті белсенділік анықталды. / Обнаружена подозрительная активность.")
+        # Optional: auto-ban or notify admin
+        # await db.ban_user(message.from_user.id)
+        # return
+
     if not user:
         args = command.args
         referred_by = None
@@ -102,6 +121,7 @@ async def cmd_start(message: Message, command: CommandObject):
                 referred_by = None
         
         await db.create_user(message.from_user.id, message.from_user.username, referred_by)
+        await db.update_anti_fraud(message.from_user.id, str(ip), str(device))
         user = await db.get_user(message.from_user.id)
         
         if referred_by:
@@ -291,15 +311,81 @@ async def admin_ticket_view(message: Message):
 
 @router.callback_query(F.data == "admin_panel", F.from_user.id == ADMIN_ID)
 async def admin_panel(callback: CallbackQuery):
-    users, sales = await db.get_stats()
-    profit = await db.get_profit_stats()
-    await callback.message.answer(
+    await callback.message.edit_text(
         f"📊 **Админ панель**\n\n"
-        f"👥 Пайдаланушылар: {users}\n"
-        f"💰 Жалпы сауда: {sales:.2f} ₸\n"
-        f"📈 Таза пайда: {profit:.2f} ₸",
+        f"Төмендегі батырмалар арқылы ботты басқара аласыз:",
         reply_markup=admin_kb()
     )
+    await callback.answer()
+
+@router.callback_query(F.data == "admin_stats", F.from_user.id == ADMIN_ID)
+async def admin_stats_view(callback: CallbackQuery):
+    users, sales = await db.get_stats()
+    profit = await db.get_profit_stats()
+    new_users, today_sales, today_profit = await db.get_today_stats()
+    
+    text = (
+        f"📊 **Жалпы статистика:**\n\n"
+        f"👥 Пайдаланушылар: `{users}`\n"
+        f"💰 Жалпы сауда: `{sales:.2f} ₸`\n"
+        f"📈 Таза пайда: `{profit:.2f} ₸`\n\n"
+        f"📅 **Бүгінгі статистика:**\n\n"
+        f"🆕 Жаңа пайдаланушылар: `{new_users}`\n"
+        f"💰 Бүгінгі сауда: `{today_sales:.2f} ₸`\n"
+        f"📈 Бүгінгі пайда: `{today_profit:.2f} ₸`"
+    )
+    
+    from keyboards import InlineKeyboardBuilder
+    builder = InlineKeyboardBuilder()
+    builder.button(text="‹ Артқа", callback_data="admin_panel")
+    
+    await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+    await callback.answer()
+
+@router.callback_query(F.data == "admin_broadcast", F.from_user.id == ADMIN_ID)
+async def admin_broadcast_start(callback: CallbackQuery, state: FSMContext):
+    await callback.message.edit_text("📢 Барлық пайдаланушыларға жіберілетін хабарламаны жазыңыз:")
+    await state.set_state(AdminState.waiting_for_broadcast)
+    await callback.answer()
+
+@router.message(AdminState.waiting_for_broadcast, F.from_user.id == ADMIN_ID)
+async def admin_broadcast_process(message: Message, state: FSMContext):
+    text = message.text
+    users = await db.get_all_users_ids()
+    
+    await message.answer(f"⏳ Хабарлама `{len(users)}` пайдаланушыға жіберілуде...", parse_mode="Markdown")
+    
+    count = 0
+    for user_id in users:
+        try:
+            await message.bot.send_message(user_id, text)
+            count += 1
+            await asyncio.sleep(0.05) # Rate limit-тен сақтану
+        except:
+            pass
+            
+    await message.answer(f"✅ Хабарлама `{count}` пайдаланушыға сәтті жіберілді!", reply_markup=admin_kb())
+    await state.clear()
+
+@router.callback_query(F.data == "admin_reward_referrals", F.from_user.id == ADMIN_ID)
+async def admin_reward_referrals(callback: CallbackQuery):
+    top = await db.get_top_referrers(3) # Reward top 3
+    rewards = [5000, 3000, 1000] # 1st: 5000, 2nd: 3000, 3rd: 1000
+    
+    for i, (ref_id, count) in enumerate(top):
+        if i < len(rewards):
+            reward = rewards[i]
+            await db.update_balance(ref_id, reward)
+            try:
+                await callback.message.bot.send_message(
+                    ref_id,
+                    f"🏆 **Құттықтаймыз!**\n\nСіз рефералдар саны бойынша `{i+1}`-орын алдыңыз және `{reward} ₸` бонус алдыңыз!",
+                    parse_mode="Markdown"
+                )
+            except:
+                pass
+                
+    await callback.message.answer("✅ Топ рефералдар марапатталды!")
     await callback.answer()
 
 @router.callback_query(F.data == "admin_api_balance", F.from_user.id == ADMIN_ID)
@@ -532,6 +618,19 @@ async def process_stars_id(message: Message, state: FSMContext, api: APIClient):
     
     if order_res.get("success"):
         await db.update_balance(message.from_user.id, -data['total_kzt'])
+        
+        # Сауданы базаға жазу
+        await db.create_order(
+            user_id=message.from_user.id,
+            order_id_api=order_res.get("order_id", 0),
+            product_type="stars",
+            product_name=f"{data['amount']} Stars",
+            description=f"Telegram Stars @{target}",
+            amount_kzt=data['total_kzt'],
+            profit_kzt=data['total_kzt'] * 0.1, # 10% пайда
+            status='completed'
+        )
+        
         await message.answer(
             f"✅ Тапсырыс қабылданды!\n📦 Мөлшер: `{data['amount']} Stars`\n👤 Алушы: `@{target}`\n💰 Бағасы: `{data['total_kzt']:.2f} ₸`" if lang == 'kz' else
             f"✅ Заказ принят!\n📦 Количество: `{data['amount']} Stars`\n👤 Получатель: `@{target}`\n💰 Цена: `{data['total_kzt']:.2f} ₸`",
@@ -551,6 +650,111 @@ async def set_lang(callback: CallbackQuery):
     await callback.message.answer(TEXTS[lang]['start'].format(name=callback.from_user.full_name), reply_markup=main_menu_kb(callback.from_user.id == ADMIN_ID, lang))
     await callback.answer()
 
+@router.callback_query(F.data == "topup")
+async def start_topup(callback: CallbackQuery):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    from keyboards import payment_methods_kb
+    await callback.message.edit_text(
+        "💳 Төлем әдісін таңдаңыз / Выберите способ оплаты:" if lang == 'kz' else "💳 Выберите способ оплаты:",
+        reply_markup=payment_methods_kb(lang)
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "topup_kaspi")
+async def topup_kaspi(callback: CallbackQuery, state: FSMContext):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    await callback.message.edit_text(
+        "💳 **Kaspi арқылы толтыру**\n\n"
+        "1. `+7 700 123 45 67` нөміріне (Аты-жөні: РЕНЗО) қажетті соманы аударыңыз.\n"
+        "2. Аударма жасалған соң, чекті (скриншот) осы чатқа жіберіңіз.\n\n"
+        "⚠️ Чексіз төлем қабылданбайды!" if lang == 'kz' else
+        "💳 **Пополнение через Kaspi**\n\n"
+        "1. Переведите нужную сумму на номер `+7 700 123 45 67` (Имя: РЕНЗО).\n"
+        "2. После перевода отправьте чек (скриншот) в этот чат.\n\n"
+        "⚠️ Без чека оплата не принимается!",
+        parse_mode="Markdown"
+    )
+    await state.set_state(TopupState.waiting_for_amount) # Reuse for receipt
+    await callback.answer()
+
+@router.message(TopupState.waiting_for_amount, F.photo)
+async def process_kaspi_receipt(message: Message, state: FSMContext):
+    user = await db.get_user(message.from_user.id)
+    lang = user[4] if user else 'kz'
+    
+    photo_id = message.photo[-1].file_id
+    req_id = await db.create_payment_request(message.from_user.id, 0, "kaspi", photo_id)
+    
+    await message.answer(
+        "✅ Чек қабылданды! Админ тексерген соң теңгеріміңіз толтырылады." if lang == 'kz' else
+        "✅ Чек принят! Баланс будет пополнен после проверки админом."
+    )
+    
+    # Notify admin
+    try:
+        from keyboards import admin_payment_request_kb
+        await message.bot.send_photo(
+            ADMIN_ID,
+            photo_id,
+            caption=f"💳 **Жаңа төлем сұранысы!**\n\nID: `{message.from_user.id}`\nUsername: `@{message.from_user.username}`\nСұраныс ID: `#{req_id}`",
+            reply_markup=admin_payment_request_kb(req_id),
+            parse_mode="Markdown"
+        )
+    except:
+        pass
+        
+    await state.clear()
+
+@router.callback_query(F.data.startswith("adm_pay_approve_"), F.from_user.id == ADMIN_ID)
+async def admin_approve_payment(callback: CallbackQuery, state: FSMContext):
+    req_id = int(callback.data.split("_")[3])
+    req = await db.get_payment_request(req_id)
+    
+    if req and req[5] == 'pending':
+        await db.update_payment_request_status(req_id, 'approved')
+        # Ask for amount to add
+        await callback.message.answer(f"💰 Сұраныс #{req_id} үшін соманы енгізіңіз (₸):")
+        await state.update_data(approve_req_id=req_id, approve_user_id=req[1])
+        await state.set_state(AdminState.waiting_for_balance)
+    
+    await callback.answer()
+
+@router.message(AdminState.waiting_for_balance, F.from_user.id == ADMIN_ID)
+async def admin_process_approve_amount(message: Message, state: FSMContext):
+    data = await state.get_data()
+    req_id = data.get("approve_req_id")
+    user_id = data.get("approve_user_id")
+    
+    try:
+        amount = float(message.text)
+        await db.update_balance(user_id, amount)
+        await db.update_payment_request_status(req_id, 'completed')
+        
+        await message.answer(f"✅ Пайдаланушыға {amount} ₸ қосылды!")
+        await message.bot.send_message(user_id, f"✅ Сіздің төлеміңіз расталды! Теңгеріміңізге `{amount} ₸` қосылды.", parse_mode="Markdown")
+    except:
+        await message.answer("❌ Қате сома.")
+        
+    await state.clear()
+
+@router.callback_query(F.data == "top_clients")
+async def show_top_clients(callback: CallbackQuery):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    
+    top = await db.get_top_referrers()
+    text = "🏆 **Топ рефералдар:**\n\n" if lang == 'kz' else "🏆 **Топ рефералов:**\n\n"
+    
+    for i, (ref_id, count) in enumerate(top, 1):
+        ref_user = await db.get_user_by_id(ref_id)
+        username = ref_user[2] if ref_user else ref_id
+        text += f"{i}. `@{username}` — {count} адам\n"
+        
+    await callback.message.edit_text(text, reply_markup=top_referrers_kb(lang), parse_mode="Markdown")
+    await callback.answer()
+
 @router.callback_query(F.data == "referral")
 async def show_referral(callback: CallbackQuery):
     user = await db.get_user(callback.from_user.id)
@@ -559,6 +763,101 @@ async def show_referral(callback: CallbackQuery):
     link = f"https://t.me/renzonftbot?start={callback.from_user.id}"
     await callback.message.answer(TEXTS[lang]['ref'].format(link=link, count=count, earned=earned, percent=int(REF_PERCENT*100)), parse_mode="Markdown")
     await callback.answer()
+
+from aiogram.types import Message, CallbackQuery, LabeledPrice, PreCheckoutQuery
+import httpx
+
+CRYPTO_BOT_TOKEN = os.getenv("CRYPTO_BOT_TOKEN")
+PAYMENT_PROVIDER_TOKEN = os.getenv("PAYMENT_PROVIDER_TOKEN")
+
+@router.callback_query(F.data == "topup_tgpay")
+async def topup_tgpay(callback: CallbackQuery, state: FSMContext):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    await callback.message.answer(
+        "💎 **Telegram Payments арқылы толтыру**\n\nСоманы енгізіңіз (₸):" if lang == 'kz' else
+        "💎 **Пополнение через Telegram Payments**\n\nВведите сумму (₸):",
+        parse_mode="Markdown"
+    )
+    await state.set_state(TopupState.waiting_for_amount)
+    await state.update_data(method="tgpay")
+    await callback.answer()
+
+@router.callback_query(F.data == "topup_cryptobot")
+async def topup_cryptobot(callback: CallbackQuery, state: FSMContext):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    await callback.message.answer(
+        "🤖 **CryptoBot арқылы толтыру**\n\nСоманы енгізіңіз (₸):" if lang == 'kz' else
+        "🤖 **Пополнение через CryptoBot**\n\nВведите сумму (₸):",
+        parse_mode="Markdown"
+    )
+    await state.set_state(TopupState.waiting_for_amount)
+    await state.update_data(method="cryptobot")
+    await callback.answer()
+
+@router.message(TopupState.waiting_for_amount, F.text)
+async def process_amount_for_payment(message: Message, state: FSMContext):
+    if not message.text.isdigit():
+        await message.answer("❌ Тек сандарды енгізіңіз.")
+        return
+    
+    amount = float(message.text)
+    data = await state.get_data()
+    method = data.get("method")
+    
+    if method == "tgpay":
+        prices = [LabeledPrice(label="Теңгерімді толтыру", amount=int(amount * 100))] # KZT in cents
+        await message.bot.send_invoice(
+            message.chat.id,
+            title="Теңгерімді толтыру",
+            description=f"Бот теңгерімін {amount} ₸-ге толтыру",
+            provider_token=PAYMENT_PROVIDER_TOKEN,
+            currency="KZT",
+            prices=prices,
+            payload=f"topup_{message.from_user.id}_{amount}"
+        )
+    elif method == "cryptobot":
+        # Create CryptoBot invoice
+        async with httpx.AsyncClient() as client:
+            # We need to convert KZT to USD or similar if CryptoBot doesn't support KZT
+            # For now, let's assume we use USD and 1 USD = 450 KZT
+            usd_amount = amount / 450
+            resp = await client.post(
+                "https://pay.crypt.bot/api/createInvoice",
+                headers={"Crypto-Pay-API-Token": CRYPTO_BOT_TOKEN},
+                json={
+                    "asset": "USDT",
+                    "amount": f"{usd_amount:.2f}",
+                    "description": f"Topup {amount} KZT",
+                    "payload": f"topup_{message.from_user.id}_{amount}"
+                }
+            )
+            res_data = resp.json()
+            if res_data.get("ok"):
+                pay_url = res_data["result"]["pay_url"]
+                from aiogram.utils.keyboard import InlineKeyboardBuilder
+                builder = InlineKeyboardBuilder()
+                builder.button(text="💳 Төлеу / Оплатить", url=pay_url)
+                await message.answer(f"🤖 CryptoBot арқылы `{amount} ₸` төлеу үшін төмендегі батырманы басыңыз:", reply_markup=builder.as_markup(), parse_mode="Markdown")
+            else:
+                await message.answer(f"❌ Қате: {res_data.get('error')}")
+    
+    await state.clear()
+
+@router.pre_checkout_query()
+async def process_pre_checkout(pre_checkout_query: PreCheckoutQuery):
+    await pre_checkout_query.answer(ok=True)
+
+@router.message(F.successful_payment)
+async def process_successful_payment(message: Message):
+    payload = message.successful_payment.invoice_payload
+    if payload.startswith("topup_"):
+        _, user_id, amount = payload.split("_")
+        user_id = int(user_id)
+        amount = float(amount)
+        await db.update_balance(user_id, amount)
+        await message.answer(f"✅ Теңгеріміңіз `{amount} ₸`-ге сәтті толтырылды!", parse_mode="Markdown")
 
 @router.callback_query(F.data == "support")
 async def show_support(callback: CallbackQuery):
@@ -634,6 +933,74 @@ async def process_promo(message: Message, state: FSMContext):
     
     await state.clear()
 
+@router.callback_query(F.data == "buy_ton")
+async def start_buy_ton(callback: CallbackQuery, state: FSMContext):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    await callback.message.edit_text(
+        "💎 **TON сатып алу**\n\nҚанша TON сатып алғыңыз келеді?" if lang == 'kz' else
+        "💎 **Покупка TON**\n\nСколько TON вы хотите купить?",
+        parse_mode="Markdown"
+    )
+    await state.set_state(TONState.waiting_for_amount)
+    await callback.answer()
+
+@router.message(TONState.waiting_for_amount)
+async def process_ton_amount(message: Message, state: FSMContext):
+    if not message.text.replace(".", "").isdigit():
+        await message.answer("❌ Тек сандарды енгізіңіз.")
+        return
+    amount = float(message.text)
+    await state.update_data(amount=amount)
+    await message.answer("📬 TON әмияныңыздың мекен-жайын (address) жіберіңіз:")
+    await state.set_state(TONState.waiting_for_address)
+
+@router.message(TONState.waiting_for_address)
+async def process_ton_address(message: Message, state: FSMContext, api: APIClient):
+    data = await state.get_data()
+    address = message.text.strip()
+    
+    res = await api.place_ton_order(address, data['amount'])
+    if res.get("success"):
+        await message.answer(f"✅ TON тапсырысы қабылданды! Сома: `{data['amount']} TON`", parse_mode="Markdown")
+    else:
+        await message.answer(f"❌ Қате: {res.get('error')}")
+    await state.clear()
+
+@router.callback_query(F.data == "sell_stars")
+async def start_sell_stars(callback: CallbackQuery, state: FSMContext):
+    user = await db.get_user(callback.from_user.id)
+    lang = user[4] if user else 'kz'
+    await callback.message.edit_text(
+        "💰 **Stars сату**\n\nҚанша Stars сатқыңыз келеді?" if lang == 'kz' else
+        "💰 **Продажа Stars**\n\nСколько Stars вы хотите продать?",
+        parse_mode="Markdown"
+    )
+    await state.set_state(SellStarsState.waiting_for_amount)
+    await callback.answer()
+
+@router.message(SellStarsState.waiting_for_amount)
+async def process_sell_stars_amount(message: Message, state: FSMContext):
+    if not message.text.isdigit():
+        await message.answer("❌ Тек сандарды енгізіңіз.")
+        return
+    amount = int(message.text)
+    await state.update_data(amount=amount)
+    await message.answer("📬 Төлемді алатын TON әмияныңыздың мекен-жайын жіберіңіз:")
+    await state.set_state(SellStarsState.waiting_for_address)
+
+@router.message(SellStarsState.waiting_for_address)
+async def process_sell_stars_address(message: Message, state: FSMContext, api: APIClient):
+    data = await state.get_data()
+    address = message.text.strip()
+    
+    res = await api.place_sell_stars_order(data['amount'], address)
+    if res.get("success"):
+        await message.answer(f"✅ Stars сату тапсырысы қабылданды! Мөлшер: `{data['amount']} Stars`", parse_mode="Markdown")
+    else:
+        await message.answer(f"❌ Қате: {res.get('error')}")
+    await state.clear()
+
 @router.callback_query(F.data == "buy_premium")
 async def buy_premium_menu(callback: CallbackQuery):
     user = await db.get_user(callback.from_user.id)
@@ -682,6 +1049,19 @@ async def process_premium_id(message: Message, state: FSMContext, api: APIClient
     
     if order_res.get("success"):
         await db.update_balance(message.from_user.id, -data['price'])
+        
+        # Сауданы базаға жазу
+        await db.create_order(
+            user_id=message.from_user.id,
+            order_id_api=order_res.get("order_id", 0),
+            product_type="premium",
+            product_name=f"Premium {data['months']} ай",
+            description=f"Telegram Premium @{target}",
+            amount_kzt=data['price'],
+            profit_kzt=data['price'] * 0.2, # 20% пайда
+            status='completed'
+        )
+        
         await message.answer(
             f"✅ Premium тапсырысы қабылданды!\n📦 Мерзімі: `{data['months']} ай`\n👤 Алушы: `@{target}`" if lang == 'kz' else
             f"✅ Заказ на Premium принят!\n📦 Срок: `{data['months']} мес`\n👤 Получатель: `@{target}`",

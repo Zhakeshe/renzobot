@@ -173,6 +173,34 @@ class APIClient:
             except Exception as e:
                 return {"success": False, "error": str(e)}
 
+    async def place_ton_order(self, address: str, amount: float) -> Dict[str, Any]:
+        async with self.limiter:
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        f"{self.base_url}/api/v1/client/orders/ton",
+                        headers=self.headers,
+                        json={"address": address, "amount": amount},
+                        timeout=15
+                    )
+                    return response.json()
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+
+    async def place_sell_stars_order(self, quantity: int, ton_address: str) -> Dict[str, Any]:
+        async with self.limiter:
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        f"{self.base_url}/api/v1/client/orders/stars/sell",
+                        headers=self.headers,
+                        json={"quantity": quantity, "ton_address": ton_address},
+                        timeout=15
+                    )
+                    return response.json()
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+
     async def get_order_status(self, order_id: int) -> Dict[str, Any]:
         async with self.limiter:
             async with httpx.AsyncClient() as client:

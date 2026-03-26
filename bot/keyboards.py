@@ -1,6 +1,34 @@
 from aiogram import types
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
+def top_referrers_kb(lang: str = 'kz'):
+    builder = InlineKeyboardBuilder()
+    back_text = "‹ Артқа" if lang == 'kz' else "‹ Назад"
+    builder.button(text=back_text, callback_data="referral")
+    return builder.as_markup()
+
+def payment_methods_kb(lang: str = 'kz'):
+    builder = InlineKeyboardBuilder()
+    if lang == 'kz':
+        builder.button(text="💳 Kaspi (Аударма)", callback_data="topup_kaspi")
+        builder.button(text="🤖 CryptoBot", callback_data="topup_cryptobot")
+        builder.button(text="💎 Telegram Payments", callback_data="topup_tgpay")
+        builder.button(text="‹ Артқа", callback_data="profile")
+    else:
+        builder.button(text="💳 Kaspi (Перевод)", callback_data="topup_kaspi")
+        builder.button(text="🤖 CryptoBot", callback_data="topup_cryptobot")
+        builder.button(text="💎 Telegram Payments", callback_data="topup_tgpay")
+        builder.button(text="‹ Назад", callback_data="profile")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def admin_payment_request_kb(req_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Растау", callback_data=f"adm_pay_approve_{req_id}")
+    builder.button(text="❌ Бас тарту", callback_data=f"adm_pay_reject_{req_id}")
+    builder.adjust(2)
+    return builder.as_markup()
+
 def main_menu_kb(is_admin: bool = False, lang: str = 'kz'):
     builder = InlineKeyboardBuilder()
     if lang == 'kz':
@@ -60,6 +88,8 @@ def admin_kb():
     builder.button(text="📊 Статистика", callback_data="admin_stats")
     builder.button(text="💳 API Теңгерім", callback_data="admin_api_balance")
     builder.button(text="🎫 Тикеттер", callback_data="admin_tickets")
+    builder.button(text="📢 Жарнама (Рассылка)", callback_data="admin_broadcast")
+    builder.button(text="🏆 Рефералдарды марапаттау", callback_data="admin_reward_referrals")
     builder.adjust(1)
     return builder.as_markup()
 
